@@ -1,0 +1,81 @@
+<Window x:Class="SYSMR.UI.StoreAccountLoginWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Acesso - SYSMR" Width="620" Height="690" MinWidth="540" MinHeight="520"
+        ResizeMode="CanResize" WindowStartupLocation="CenterScreen"
+        Background="#EAF0F8" FontFamily="Segoe UI" UseLayoutRounding="True" SnapsToDevicePixels="True">
+    <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+        <Grid MinHeight="500">
+            <Border Width="500" Margin="20" Padding="28" HorizontalAlignment="Center" VerticalAlignment="Top"
+                    Background="White" CornerRadius="16" BorderBrush="#DCE4EF" BorderThickness="1">
+                <Border.Effect>
+                    <DropShadowEffect BlurRadius="24" ShadowDepth="4" Opacity="0.12" Color="#17233B"/>
+                </Border.Effect>
+                <StackPanel>
+                    <Border Width="42" Height="42" CornerRadius="11" Background="#17233B" HorizontalAlignment="Left">
+                        <TextBlock Text="S" Foreground="White" FontSize="24" FontWeight="Bold"
+                                   HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                    </Border>
+                    <TextBlock Text="SYSMR" FontSize="25" FontWeight="Bold" Foreground="#17233B" Margin="0,12,0,0"/>
+                    <TextBlock Text="Escolha o tipo de acesso para continuar."
+                               FontSize="13" TextWrapping="Wrap" Foreground="#68778F" Margin="0,5,0,16"/>
+
+                    <TabControl x:Name="LoginTabs" MinHeight="360" SelectionChanged="LoginTabs_SelectionChanged">
+                        <TabItem Header="Lojista" Padding="15,8">
+                            <StackPanel Margin="8,16,8,8">
+                                <TextBlock Text="Acesso do lojista" FontSize="18" FontWeight="Bold" Foreground="#17233B"/>
+                                <TextBlock Text="Entre com o número, o nome e a senha da loja."
+                                           TextWrapping="Wrap" Foreground="#68778F" Margin="0,5,0,16"/>
+                                <TextBlock Text="Número da loja" FontWeight="SemiBold" Foreground="#26354D" Margin="0,0,0,6"/>
+                                <TextBox x:Name="CustomerNumberBox" Padding="10,7" FontSize="15" MinHeight="40"
+                                         BorderBrush="#CBD5E1" BorderThickness="1" Background="#FBFCFE"/>
+                                <TextBlock Text="Nome da loja" FontWeight="SemiBold" Foreground="#26354D" Margin="0,11,0,6"/>
+                                <TextBox x:Name="CustomerNameBox" Padding="10,7" FontSize="15" MinHeight="40"
+                                         BorderBrush="#CBD5E1" BorderThickness="1" Background="#FBFCFE"/>
+                                <TextBlock Text="Senha da loja" FontWeight="SemiBold" Foreground="#26354D" Margin="0,11,0,6"/>
+                                <PasswordBox x:Name="PasswordBox" Padding="10,7" FontSize="15" MinHeight="40"
+                                             BorderBrush="#CBD5E1" BorderThickness="1" Background="#FBFCFE"
+                                             KeyDown="PasswordBox_KeyDown"/>
+                                <Border Background="#FFF7ED" CornerRadius="8" Padding="10,7" Margin="0,12,0,0">
+                                    <TextBlock x:Name="StatusText" Foreground="#9A3412" TextWrapping="Wrap" FontSize="12"/>
+                                </Border>
+                                <TextBlock Text="Após entrar uma vez, a sessão será restaurada automaticamente neste computador. Use Sair da conta para desativar essa opção."
+                                           TextWrapping="Wrap" Foreground="#738198" FontSize="11" Margin="0,9,0,0"/>
+                                <Button Content="Entrar como lojista" MinHeight="44" FontSize="14" FontWeight="SemiBold"
+                                        Background="#17233B" Foreground="White" BorderThickness="0" Margin="0,16,0,0"
+                                        Click="Login_Click"/>
+                                <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,10,0,0">
+                                    <Button Content="Configurar Firebase" Padding="10,5" Foreground="#34445E"
+                                            Background="Transparent" BorderThickness="0" Click="ConfigureFirebase_Click"/>
+                                    <TextBlock Text="·" Foreground="#A4AFC0" VerticalAlignment="Center" Margin="4,0"/>
+                                    <Button x:Name="CreateAccountButton" Content="Criar conta da loja" Padding="10,5"
+                                            Foreground="#34445E" Background="Transparent" BorderThickness="0"
+                                            Click="CreateAccount_Click"/>
+                                </StackPanel>
+                            </StackPanel>
+                        </TabItem>
+                        <TabItem Header="SYSMR" Padding="15,8">
+                            <StackPanel Margin="8,16,8,8">
+                                <TextBlock Text="Acesso administrativo SYSMR" FontSize="18" FontWeight="Bold" Foreground="#17233B"/>
+                                <TextBlock Text="Área restrita ao Super Admin deste computador."
+                                           TextWrapping="Wrap" Foreground="#68778F" Margin="0,5,0,18"/>
+                                <TextBlock Text="PIN do Super Admin" FontWeight="SemiBold" Foreground="#26354D" Margin="0,0,0,6"/>
+                                <PasswordBox x:Name="AdminPinBox" Padding="10,7" FontSize="15" MinHeight="42"
+                                             BorderBrush="#CBD5E1" BorderThickness="1" Background="#FBFCFE"
+                                             KeyDown="AdminPinBox_KeyDown"/>
+                                <Border Background="#FFF7ED" CornerRadius="8" Padding="10,7" Margin="0,13,0,0">
+                                    <TextBlock x:Name="AdminStatusText" Foreground="#9A3412" TextWrapping="Wrap" FontSize="12"/>
+                                </Border>
+                                <Button Content="Entrar no SYSMR" MinHeight="44" FontSize="14" FontWeight="SemiBold"
+                                        Background="#17233B" Foreground="White" BorderThickness="0" Margin="0,16,0,0"
+                                        Click="AdminLogin_Click"/>
+                                <TextBlock Text="O PIN administrativo é local e não substitui as credenciais de acesso da loja."
+                                           TextWrapping="Wrap" Foreground="#738198" FontSize="11" Margin="0,12,0,0"/>
+                            </StackPanel>
+                        </TabItem>
+                    </TabControl>
+                </StackPanel>
+            </Border>
+        </Grid>
+    </ScrollViewer>
+</Window>

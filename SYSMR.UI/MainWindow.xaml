@@ -1,0 +1,507 @@
+<Window x:Class="SYSMR.UI.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Icon="/SYSMR.UI;component/Assets/sysmr.ico"
+        Title="SYSMR | Gestão e PDV" Height="820" Width="1360"
+        MinHeight="700" MinWidth="1120" WindowStartupLocation="CenterScreen"
+        ResizeMode="CanResize" WindowStyle="SingleBorderWindow"
+        Background="{StaticResource CanvasBrush}" Foreground="{StaticResource InkBrush}"
+        PreviewKeyDown="Window_PreviewKeyDown">
+    <Window.Resources>
+        <Style x:Key="NavButton" TargetType="Button">
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="Foreground" Value="#C8D3E2"/>
+            <Setter Property="HorizontalContentAlignment" Value="Left"/>
+            <Setter Property="Margin" Value="0,4"/>
+            <Setter Property="Padding" Value="16,13"/>
+        </Style>
+        <Style x:Key="PanelCard" TargetType="Border">
+            <Setter Property="Background" Value="White"/>
+            <Setter Property="CornerRadius" Value="12"/>
+            <Setter Property="Padding" Value="18"/>
+            <Setter Property="BorderBrush" Value="#E8EDF3"/>
+            <Setter Property="BorderThickness" Value="1"/>
+        </Style>
+        <Style x:Key="PageTitle" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="26"/>
+            <Setter Property="FontWeight" Value="Bold"/>
+            <Setter Property="Foreground" Value="#17233B"/>
+        </Style>
+        <Style x:Key="ToolbarButton" TargetType="Button">
+            <Setter Property="Margin" Value="2"/>
+            <Setter Property="Padding" Value="5,2"/>
+            <Setter Property="MinHeight" Value="40"/>
+            <Setter Property="VerticalContentAlignment" Value="Center"/>
+            <Setter Property="HorizontalContentAlignment" Value="Center"/>
+            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="Background" Value="#F2F5F9"/>
+        </Style>
+    </Window.Resources>
+    <Grid>
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="228"/>
+            <ColumnDefinition Width="*"/>
+        </Grid.ColumnDefinitions>
+
+        <Border Grid.Column="0" Background="#17233B">
+            <DockPanel Margin="16">
+                <StackPanel DockPanel.Dock="Top" Margin="4,10,4,32">
+                    <TextBlock Text="SYSMR" FontSize="27" FontWeight="Bold" Foreground="White"/>
+                    <TextBlock Text="VENDAS  •  PDV" FontSize="10" FontWeight="SemiBold" Foreground="#8CA0BA" Margin="2,3,0,0"/>
+                </StackPanel>
+                <StackPanel DockPanel.Dock="Bottom" Margin="4,0,4,6">
+                    <Border Background="#22324E" CornerRadius="9" Padding="12">
+                        <StackPanel>
+                            <TextBlock x:Name="SyncHeadline" Text="SINCRONIZAÇÃO" Foreground="#61D6B7" FontSize="11" FontWeight="Bold"/>
+                            <TextBlock x:Name="SyncDetail" Text="Verificando fila local..." Foreground="#A7B4C7" FontSize="11" Margin="0,5,0,0" TextWrapping="Wrap"/>
+                        </StackPanel>
+                    </Border>
+                    <TextBlock Text="SYSMR • operação local" Foreground="#74839A" FontSize="10" Margin="3,14,0,0"/>
+                </StackPanel>
+                <StackPanel>
+                    <Button Style="{StaticResource NavButton}" Content="▦   Ponto de venda" Tag="Pdv" Click="Navigation_Click"/>
+                    <Button x:Name="SidebarManagerButton" Style="{StaticResource NavButton}" Content="▣   Estoque" Tag="Manager" Click="Navigation_Click"/>
+                    <Button x:Name="SidebarSetupButton" Style="{StaticResource NavButton}" Content="⚙   Configurações" Tag="Setup" Click="Navigation_Click"/>
+                    <Button x:Name="SidebarAuditButton" Style="{StaticResource NavButton}" Content="☷   Log de ações" Tag="Audit" Click="Navigation_Click" Visibility="Collapsed"/>
+                    <Button Style="{StaticResource NavButton}" Content="?   Ajuda e treinamento" Tag="Help" Click="Navigation_Click"/>
+                </StackPanel>
+            </DockPanel>
+        </Border>
+
+        <Grid Grid.Column="1" Margin="28,22,28,20">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="52"/>
+                <RowDefinition Height="58"/>
+                <RowDefinition Height="*"/>
+                <RowDefinition Height="28"/>
+            </Grid.RowDefinitions>
+            <DockPanel Grid.Row="0" LastChildFill="False">
+                <StackPanel DockPanel.Dock="Left">
+                    <TextBlock x:Name="PageHeading" Text="Ponto de venda" FontSize="19" FontWeight="Bold"/>
+                    <TextBlock x:Name="OperatorLabel" Text="Vendedor: —" FontSize="11" Foreground="{StaticResource MutedBrush}" Margin="0,2,0,0"/>
+                </StackPanel>
+                <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
+                    <TextBlock Text="● LOCAL" Foreground="#18856F" FontSize="11" FontWeight="Bold" VerticalAlignment="Center" Margin="0,0,12,0"/>
+                    <Button x:Name="AdminAccessButton" Content="Entrar Super Admin" Padding="12,7" FontSize="11" Click="AdminAccess_Click"/>
+                    <Button Content="Sair da conta" Padding="10,7" FontSize="11" Margin="6,0,0,0"
+                            ToolTip="Desativar início automático e solicitar login na próxima abertura"
+                            Click="Logout_Click"/>
+                    <Button Content="—" ToolTip="Minimizar" FontSize="17" FontWeight="Bold"
+                            Width="36" Height="32" Padding="0" Margin="8,0,2,0"
+                            Background="Transparent" Click="MinimizeWindow_Click"/>
+                    <Button x:Name="MaximizeRestoreButton" Content="□" ToolTip="Maximizar"
+                            FontSize="14" Width="36" Height="32" Padding="0" Margin="2,0"
+                            Background="Transparent" Click="MaximizeRestoreWindow_Click"/>
+                    <Button Content="×" ToolTip="Fechar" FontSize="19" FontWeight="SemiBold"
+                            Width="36" Height="32" Padding="0" Margin="2,0,0,0"
+                            Background="Transparent" Foreground="#B42318" Click="CloseWindow_Click"/>
+                </StackPanel>
+            </DockPanel>
+
+            <Border Grid.Row="1" MinHeight="54" Background="White" CornerRadius="10" BorderBrush="#E8EDF3" BorderThickness="1" Padding="3" Margin="0,0,0,7">
+                <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" VerticalAlignment="Center">
+                    <Button Style="{StaticResource ToolbarButton}" Content="▦  Venda" Tag="Pdv" Click="Navigation_Click" ToolTip="Ponto de venda"/>
+                    <Button Style="{StaticResource ToolbarButton}" Content="▤  Vendas" Tag="Sales" Click="Navigation_Click" ToolTip="Histórico e detalhes das vendas"/>
+                    <Button x:Name="TopReturnsButton" Style="{StaticResource ToolbarButton}" Content="↩  Devoluções" Tag="Returns" Click="Navigation_Click" ToolTip="Devolução parcial ou integral de itens"/>
+                    <Button x:Name="TopCustomersButton" Style="{StaticResource ToolbarButton}" Content="♙  Clientes" Tag="Customers" Click="Navigation_Click" ToolTip="Cadastro de clientes" Visibility="Collapsed"/>
+                    <Button x:Name="TopStockButton" Style="{StaticResource ToolbarButton}" Content="▣  Estoque" Tag="Manager" Click="Navigation_Click" ToolTip="Consultar e gerenciar produtos e estoque"/>
+                    <Button x:Name="TopSetupButton" Style="{StaticResource ToolbarButton}" Content="⚙  Configurações" Tag="Setup" Click="Navigation_Click" ToolTip="Preferências da loja e vendedores"/>
+                    <Button x:Name="TopAuditButton" Style="{StaticResource ToolbarButton}" Content="☷  Auditoria" Tag="Audit" Click="Navigation_Click" ToolTip="Log de ações" Visibility="Collapsed"/>
+                    <Button Style="{StaticResource ToolbarButton}" Content="?  Ajuda" Tag="Help" Click="Navigation_Click" ToolTip="Ajuda e treinamento"/>
+                </StackPanel>
+            </Border>
+
+            <Grid Grid.Row="2">
+                <Grid x:Name="PdvPage" Visibility="Visible">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="2.1*"/>
+                        <ColumnDefinition Width="1*"/>
+                    </Grid.ColumnDefinitions>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                        <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
+                    <Border Grid.ColumnSpan="2" Style="{StaticResource PanelCard}" Padding="16" Margin="0,0,0,16">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <StackPanel>
+                                <TextBlock Text="Leitor de código de barras" FontSize="12" Foreground="{StaticResource MutedBrush}" Margin="0,0,0,7"/>
+                                <TextBox x:Name="BarcodeBox" Height="44" FontSize="18" ToolTip="Bipe o produto ou digite o código e pressione Enter" KeyDown="BarcodeBox_KeyDown" TextChanged="BarcodeBox_TextChanged"/>
+                            </StackPanel>
+                            <Button Grid.Column="1" Content="Adicionar item" Background="#18A999" Foreground="White" Height="44" Margin="12,24,0,0" Click="BarcodeAdd_Click"/>
+                        </Grid>
+                    </Border>
+                    <Border Grid.Row="1" Style="{StaticResource PanelCard}" Padding="0">
+                        <DockPanel>
+                            <Border DockPanel.Dock="Top" Padding="18,15" BorderBrush="#EDF1F5" BorderThickness="0,0,0,1">
+                                <DockPanel>
+                                    <TextBlock Text="Itens da venda" FontSize="16" FontWeight="Bold"/>
+                                    <TextBlock x:Name="CartCountText" DockPanel.Dock="Right" Text="0 itens" Foreground="{StaticResource MutedBrush}" VerticalAlignment="Center"/>
+                                </DockPanel>
+                            </Border>
+                            <DataGrid x:Name="CartGrid" ItemsSource="{Binding CartItems}" IsReadOnly="True" SelectionMode="Single" Margin="0">
+                                <DataGrid.Columns>
+                                    <DataGridTextColumn Header="PRODUTO" Binding="{Binding Name}" Width="*"/>
+                                    <DataGridTextColumn Header="QTD." Binding="{Binding Quantity, StringFormat=N3}" Width="85"/>
+                                    <DataGridTextColumn Header="UNITÁRIO" Binding="{Binding UnitPrice, StringFormat=C2}" Width="110"/>
+                                    <DataGridTextColumn Header="TOTAL" Binding="{Binding Total, StringFormat=C2}" Width="110"/>
+                                </DataGrid.Columns>
+                            </DataGrid>
+                        </DockPanel>
+                    </Border>
+                    <Border Grid.Column="1" Grid.Row="1" Style="{StaticResource PanelCard}" Margin="16,0,0,0">
+                        <DockPanel>
+                            <StackPanel DockPanel.Dock="Top">
+                                <TextBlock Text="Busca rápida" FontSize="16" FontWeight="Bold"/>
+                                <TextBlock Text="F2 para localizar por nome ou código" Foreground="{StaticResource MutedBrush}" FontSize="11" Margin="0,5,0,12"/>
+                                <TextBox x:Name="SearchBox" ToolTip="Digite o nome ou código do produto" TextChanged="SearchBox_TextChanged"/>
+                            </StackPanel>
+                            <DataGrid x:Name="SearchGrid" ItemsSource="{Binding SearchResults}" IsReadOnly="True" SelectionMode="Single" MouseDoubleClick="SearchGrid_MouseDoubleClick" Margin="0,12,0,0">
+                                <DataGrid.Columns>
+                                    <DataGridTextColumn Header="PRODUTO" Binding="{Binding Name}" Width="*"/>
+                                    <DataGridTextColumn Header="UN." Binding="{Binding UnitOfMeasure}" Width="60"/>
+                                    <DataGridTextColumn Header="PREÇO" Binding="{Binding SalePrice, StringFormat=C2}" Width="90"/>
+                                </DataGrid.Columns>
+                            </DataGrid>
+                        </DockPanel>
+                    </Border>
+                    <Border Grid.Row="2" Grid.ColumnSpan="2" Style="{StaticResource PanelCard}" Margin="0,16,0,0" Padding="16">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <StackPanel VerticalAlignment="Center">
+                                <TextBlock Text="Cliente cadastrado (opcional)" FontSize="11" Foreground="{StaticResource MutedBrush}" Margin="0,0,0,5"/>
+                                <ComboBox x:Name="CustomerSelector" Width="300" HorizontalAlignment="Left" Padding="7" DisplayMemberPath="Name" SelectionChanged="CustomerSelector_SelectionChanged"/>
+                                <TextBox x:Name="CustomerBox" Width="300" HorizontalAlignment="Left" Height="34" Margin="0,5,0,0" ToolTip="CPF/CNPJ avulso (opcional)" KeyDown="CustomerBox_KeyDown"/>
+                            </StackPanel>
+                            <StackPanel Grid.Column="1" VerticalAlignment="Center" Margin="10,0,25,0">
+                                <TextBlock Text="TOTAL DA VENDA" FontSize="10" Foreground="{StaticResource MutedBrush}" HorizontalAlignment="Right"/>
+                                <TextBlock x:Name="TotalText" Text="R$ 0,00" FontSize="27" FontWeight="Bold" Foreground="#18A999" HorizontalAlignment="Right"/>
+                            </StackPanel>
+                            <Button Grid.Column="2" Content="F5  •  PAGAR" Background="#17233B" Foreground="White" FontSize="14" Padding="24,15" Click="Pay_Click"/>
+                        </Grid>
+                    </Border>
+                </Grid>
+
+                <Grid x:Name="ManagerPage" Visibility="Collapsed">
+                    <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+                    <UniformGrid Columns="3" Margin="0,0,0,16">
+                        <Border Style="{StaticResource PanelCard}" Margin="0,0,12,0">
+                            <StackPanel><TextBlock Text="VENDAS REGISTRADAS" FontSize="11" Foreground="{StaticResource MutedBrush}"/><TextBlock x:Name="ManagerSalesTotal" Text="R$ 0,00" FontSize="27" FontWeight="Bold" Margin="0,10,0,0"/></StackPanel>
+                        </Border>
+                        <Border Style="{StaticResource PanelCard}" Margin="0,0,12,0">
+                            <StackPanel><TextBlock Text="TRANSAÇÕES LOCAIS" FontSize="11" Foreground="{StaticResource MutedBrush}"/><TextBlock x:Name="ManagerSalesCount" Text="0" FontSize="27" FontWeight="Bold" Margin="0,10,0,0"/></StackPanel>
+                        </Border>
+                        <Border Style="{StaticResource PanelCard}">
+                            <StackPanel><TextBlock Text="PRODUTOS CADASTRADOS" FontSize="11" Foreground="{StaticResource MutedBrush}"/><TextBlock x:Name="ManagerProductCount" Text="0" FontSize="27" FontWeight="Bold" Margin="0,10,0,0"/></StackPanel>
+                        </Border>
+                    </UniformGrid>
+                    <Border Grid.Row="1" Style="{StaticResource PanelCard}" Padding="0">
+                        <DockPanel>
+                            <DockPanel DockPanel.Dock="Top" Margin="18,12">
+                                <StackPanel>
+                                    <TextBlock Text="Estoque local" FontSize="16" FontWeight="Bold"/>
+                                    <TextBlock x:Name="InventoryStatusText" Text="Todos os produtos" FontSize="11" Foreground="{StaticResource MutedBrush}" Margin="0,3,0,0"/>
+                                </StackPanel>
+                                <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+                                    <Button x:Name="LowStockButton" Content="⚠  Ver estoque baixo (≤ 2)" Background="#FFF1D6" Foreground="#8A4B08" Margin="0,0,8,0" Click="LowStock_Click"/>
+                                    <Button Content="＋ Produto" Background="#17233B" Foreground="White" Margin="0,0,8,0" Click="NewProduct_Click"/>
+                                    <Button Content="Editar" Click="EditProduct_Click"/>
+                                </StackPanel>
+                            </DockPanel>
+                            <DataGrid x:Name="InventoryGrid" IsReadOnly="True" Margin="0">
+                                <DataGrid.Columns>
+                                    <DataGridTextColumn Header="PRODUTO" Binding="{Binding Name}" Width="*"/>
+                                    <DataGridTextColumn Header="CATEGORIA" Binding="{Binding Category}" Width="150"/>
+                                    <DataGridTextColumn Header="UN." Binding="{Binding UnitOfMeasure}" Width="60"/>
+                                    <DataGridTextColumn Header="ESTOQUE" Binding="{Binding Stock, StringFormat=N3}" Width="110"/>
+                                    <DataGridTextColumn Header="MÍNIMO" Binding="{Binding MinimumStock, StringFormat=N3}" Width="100"/>
+                                    <DataGridTextColumn Header="PREÇO" Binding="{Binding SalePrice, StringFormat=C2}" Width="120"/>
+                                </DataGrid.Columns>
+                            </DataGrid>
+                        </DockPanel>
+                    </Border>
+                </Grid>
+
+                <Grid x:Name="SalesPage" Visibility="Collapsed">
+                    <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="1.15*"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+                    <DockPanel Margin="0,0,0,12">
+                        <TextBlock Text="Histórico de vendas" FontSize="21" FontWeight="Bold" VerticalAlignment="Center"/>
+                        <TextBox x:Name="SalesSearchBox" Width="310" DockPanel.Dock="Right" ToolTip="Buscar por cliente ou código da venda" TextChanged="SalesSearchBox_TextChanged"/>
+                    </DockPanel>
+                    <Border Grid.Row="1" Style="{StaticResource PanelCard}" Padding="0">
+                        <DataGrid x:Name="SalesGrid" IsReadOnly="True" SelectionMode="Single" SelectionChanged="SalesGrid_SelectionChanged">
+                            <DataGrid.Columns>
+                                <DataGridTextColumn Header="DATA/HORA" Binding="{Binding CreatedAt, StringFormat={}{0:dd/MM/yyyy HH:mm}}" Width="170"/>
+                                <DataGridTextColumn Header="CLIENTE" Binding="{Binding Customer}" Width="*"/>
+                                <DataGridTextColumn Header="VENDEDOR" Binding="{Binding SellerName}" Width="130"/>
+                                <DataGridTextColumn Header="PAGAMENTO" Binding="{Binding PaymentLabel}" Width="150"/>
+                                <DataGridTextColumn Header="TOTAL" Binding="{Binding Total, StringFormat=C2}" Width="120"/>
+                                <DataGridCheckBoxColumn Header="DEVOLVIDA" Binding="{Binding IsReturned}" Width="100"/>
+                                <DataGridTemplateColumn Header="IMPRIMIR" Width="82">
+                                    <DataGridTemplateColumn.CellTemplate>
+                                        <DataTemplate>
+                                            <Button Padding="6,2" ToolTip="Imprimir comprovante desta venda"
+                                                    Tag="{Binding}" Click="PrintSaleRow_Click">
+                                                <TextBlock FontFamily="Segoe MDL2 Assets" FontSize="16" Text="&#xE749;"/>
+                                            </Button>
+                                        </DataTemplate>
+                                    </DataGridTemplateColumn.CellTemplate>
+                                </DataGridTemplateColumn>
+                            </DataGrid.Columns>
+                        </DataGrid>
+                    </Border>
+                    <TextBlock Grid.Row="2" Text="Itens da venda selecionada" FontSize="15" FontWeight="Bold" Margin="2,12,0,8"/>
+                    <Border Grid.Row="3" Style="{StaticResource PanelCard}" Padding="0">
+                        <DataGrid x:Name="SaleDetailsGrid" IsReadOnly="True">
+                            <DataGrid.Columns>
+                                <DataGridTextColumn Header="PRODUTO" Binding="{Binding ProductName}" Width="*"/>
+                                <DataGridTextColumn Header="QUANTIDADE" Binding="{Binding Quantity, StringFormat=N3}" Width="130"/>
+                                <DataGridTextColumn Header="UNITÁRIO" Binding="{Binding UnitPrice, StringFormat=C2}" Width="130"/>
+                                <DataGridTextColumn Header="TOTAL" Binding="{Binding Total, StringFormat=C2}" Width="130"/>
+                            </DataGrid.Columns>
+                        </DataGrid>
+                    </Border>
+                </Grid>
+
+                <Grid x:Name="ReturnsPage" Visibility="Collapsed">
+                    <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="1.2*"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+                    <DockPanel Margin="0,0,0,10">
+                        <StackPanel>
+                            <TextBlock Text="Devoluções" FontSize="21" FontWeight="Bold"/>
+                            <TextBlock Text="Selecione uma venda para conferir seus itens e imprimir o resumo de devoluções, se houver. Informe as quantidades a devolver e confirme." Foreground="{StaticResource MutedBrush}" FontSize="11" Margin="0,3,0,0"/>
+                        </StackPanel>
+                        <Button x:Name="ReturnButton" DockPanel.Dock="Right" Content="Devolver itens selecionados" Background="#B42318" Foreground="White" VerticalAlignment="Center" Click="ReturnSale_Click"/>
+                    </DockPanel>
+                    <Border Grid.Row="1" Style="{StaticResource PanelCard}" Padding="0">
+                        <DataGrid x:Name="ReturnsGrid" IsReadOnly="True" SelectionMode="Single" SelectionChanged="ReturnsGrid_SelectionChanged">
+                            <DataGrid.Columns>
+                                <DataGridTextColumn Header="DATA/HORA" Binding="{Binding CreatedAt, StringFormat={}{0:dd/MM/yyyy HH:mm}}" Width="170"/>
+                                <DataGridTextColumn Header="CLIENTE" Binding="{Binding Customer}" Width="*"/>
+                                <DataGridTextColumn Header="PAGAMENTO ORIGINAL" Binding="{Binding PaymentLabel}" Width="170"/>
+                                <DataGridTextColumn Header="VALOR" Binding="{Binding Total, StringFormat=C2}" Width="130"/>
+                                <DataGridCheckBoxColumn Header="DEVOLVIDA" Binding="{Binding IsReturned}" Width="100"/>
+                                <DataGridTemplateColumn Header="IMPRIMIR" Width="82">
+                                    <DataGridTemplateColumn.CellTemplate>
+                                        <DataTemplate>
+                                            <Button Padding="6,2" ToolTip="Imprimir resumo das devoluções desta venda"
+                                                    IsEnabled="{Binding HasAnyReturn}" Tag="{Binding}" Click="PrintReturnRow_Click">
+                                                <TextBlock FontFamily="Segoe MDL2 Assets" FontSize="16" Text="&#xE749;"/>
+                                            </Button>
+                                        </DataTemplate>
+                                    </DataGridTemplateColumn.CellTemplate>
+                                </DataGridTemplateColumn>
+                            </DataGrid.Columns>
+                        </DataGrid>
+                    </Border>
+                    <TextBlock Grid.Row="2" Text="Itens da venda selecionada" FontSize="15" FontWeight="Bold" Margin="2,12,0,8"/>
+                    <Border Grid.Row="3" Style="{StaticResource PanelCard}" Padding="0">
+                        <DataGrid x:Name="ReturnDetailsGrid" IsReadOnly="False" CanUserAddRows="False" SelectionMode="Single">
+                            <DataGrid.Columns>
+                                <DataGridTextColumn Header="PRODUTO" Binding="{Binding ProductName}" Width="*"/>
+                                <DataGridTextColumn Header="VENDIDA" Binding="{Binding SoldQuantity, StringFormat=N3}" IsReadOnly="True" Width="90"/>
+                                <DataGridTextColumn Header="JÁ DEVOLVIDA" Binding="{Binding ReturnedQuantity, StringFormat=N3}" IsReadOnly="True" Width="110"/>
+                                <DataGridTextColumn Header="DISPONÍVEL" Binding="{Binding AvailableQuantity, StringFormat=N3}" IsReadOnly="True" Width="100"/>
+                                <DataGridTextColumn Header="DEVOLVER" Binding="{Binding QuantityToReturn, UpdateSourceTrigger=PropertyChanged, StringFormat=N3}" Width="105"/>
+                                <DataGridTextColumn Header="UNITÁRIO" Binding="{Binding UnitPrice, StringFormat=C2}" IsReadOnly="True" Width="110"/>
+                                <DataGridTextColumn Header="ESTORNO" Binding="{Binding RefundAmount, StringFormat=C2}" IsReadOnly="True" Width="110"/>
+                            </DataGrid.Columns>
+                        </DataGrid>
+                    </Border>
+                </Grid>
+
+                <Grid x:Name="CustomersPage" Visibility="Collapsed">
+                    <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+                    <DockPanel Margin="0,0,0,12">
+                        <StackPanel>
+                            <TextBlock Text="Cadastro de clientes" FontSize="21" FontWeight="Bold"/>
+                            <TextBlock x:Name="CustomerExpirySummary" Text="Revisão do cadastro a cada 30 dias; vencimento apenas gera alerta." Foreground="{StaticResource MutedBrush}" FontSize="11" Margin="0,3,0,0"/>
+                        </StackPanel>
+                        <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+                            <Button Content="＋ Novo cliente" Background="#17233B" Foreground="White" Margin="0,0,7,0" Click="NewCustomer_Click"/>
+                            <Button Content="Editar" Margin="0,0,7,0" Click="EditCustomer_Click"/>
+                            <Button Content="Renovar 30 dias" Background="#18A999" Foreground="White" Click="RenewCustomer_Click"/>
+                        </StackPanel>
+                    </DockPanel>
+                    <Border Grid.Row="1" Style="{StaticResource PanelCard}" Padding="0">
+                        <DataGrid x:Name="CustomersGrid" IsReadOnly="True" SelectionMode="Single">
+                            <DataGrid.Columns>
+                                <DataGridTextColumn Header="NOME" Binding="{Binding Name}" Width="*"/>
+                                <DataGridTextColumn Header="CPF/CNPJ" Binding="{Binding Document}" Width="150"/>
+                                <DataGridTextColumn Header="TELEFONE" Binding="{Binding Phone}" Width="145"/>
+                                <DataGridTextColumn Header="CADASTRO" Binding="{Binding RegisteredAt, StringFormat={}{0:dd/MM/yyyy}}" Width="115"/>
+                                <DataGridTextColumn Header="REVISAR ATÉ" Binding="{Binding ExpiresAt, StringFormat={}{0:dd/MM/yyyy}}" Width="120"/>
+                                <DataGridTextColumn Header="STATUS" Binding="{Binding StatusLabel}" Width="100"/>
+                            </DataGrid.Columns>
+                        </DataGrid>
+                    </Border>
+                </Grid>
+
+                <ScrollViewer x:Name="SetupPage" Visibility="Collapsed" VerticalScrollBarVisibility="Auto">
+                    <StackPanel>
+                        <DockPanel Margin="0,0,0,14">
+                            <StackPanel>
+                                <TextBlock Text="Configurações da loja" Style="{StaticResource PageTitle}" Margin="0,0,0,5"/>
+                                <TextBlock Text="Preferências locais e cadastro de vendedores" Foreground="{StaticResource MutedBrush}"/>
+                            </StackPanel>
+                            <Button x:Name="SettingsAdminButton" DockPanel.Dock="Right" Content="Entrar como Super Admin"
+                                    Padding="12,8" VerticalAlignment="Center" Click="AdminAccess_Click"/>
+                        </DockPanel>
+                        <Border Style="{StaticResource PanelCard}" Margin="0,0,0,14">
+                            <StackPanel>
+                                <TextBlock Text="Dados da loja no comprovante" FontSize="17" FontWeight="Bold"/>
+                                <TextBlock Text="Opcional: nome, telefone e endereço impressos no cabeçalho do comprovante não fiscal." TextWrapping="Wrap" Foreground="{StaticResource MutedBrush}" Margin="0,6,0,10"/>
+                                <TextBlock Text="Nome de exibição" FontWeight="SemiBold" Margin="0,4,0,4"/>
+                                <TextBox x:Name="ReceiptStoreNameBox" Padding="8" MaxLength="100"/>
+                                <TextBlock Text="Telefone" FontWeight="SemiBold" Margin="0,8,0,4"/>
+                                <TextBox x:Name="ReceiptPhoneBox" Padding="8" MaxLength="40"/>
+                                <TextBlock Text="Endereço" FontWeight="SemiBold" Margin="0,8,0,4"/>
+                                <TextBox x:Name="ReceiptAddressBox" Padding="8" MaxLength="160"/>
+                                <TextBlock Text="Mensagem de rodapé" FontWeight="SemiBold" Margin="0,8,0,4"/>
+                                <TextBox x:Name="ReceiptFooterBox" Padding="8" MaxLength="120"/>
+                                <Button Content="Salvar dados da loja" HorizontalAlignment="Left" Background="#17233B" Foreground="White" Margin="0,10,0,0" Click="SaveStoreSettings_Click"/>
+                            </StackPanel>
+                        </Border>
+                        <Border Style="{StaticResource PanelCard}" Margin="0,0,0,14">
+                            <DockPanel>
+                                <StackPanel DockPanel.Dock="Top" Margin="0,0,0,12">
+                                    <TextBlock Text="Vendedores" FontSize="17" FontWeight="Bold"/>
+                                    <TextBlock Text="Cadastre a equipe e desative quem não deve aparecer na seleção da venda. O histórico mantém o nome usado em cada venda." TextWrapping="Wrap" Foreground="{StaticResource MutedBrush}" Margin="0,5,0,0"/>
+                                </StackPanel>
+                                <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" Margin="12,0,0,0">
+                                    <Button Content="＋ Novo vendedor" Background="#17233B" Foreground="White" Margin="0,0,7,0" Click="NewSeller_Click"/>
+                                    <Button Content="Editar" Margin="0,0,7,0" Click="EditSeller_Click"/>
+                                    <Button x:Name="ToggleSellerButton" Content="Desativar" Click="ToggleSeller_Click"/>
+                                </StackPanel>
+                                <DataGrid x:Name="SellersGrid" IsReadOnly="True" SelectionMode="Single" MinHeight="180"
+                                          SelectionChanged="SellersGrid_SelectionChanged">
+                                    <DataGrid.Columns>
+                                        <DataGridTextColumn Header="NOME" Binding="{Binding Name}" Width="*"/>
+                                        <DataGridTextColumn Header="STATUS" Binding="{Binding StatusLabel}" Width="120"/>
+                                    </DataGrid.Columns>
+                                </DataGrid>
+                            </DockPanel>
+                        </Border>
+                        <Border Style="{StaticResource PanelCard}" Margin="0,0,0,14">
+                            <StackPanel>
+                                <TextBlock Text="Aplicação e banco local" FontSize="17" FontWeight="Bold"/>
+                                <TextBlock x:Name="DatabasePathText" TextWrapping="Wrap" Margin="0,10,0,0"/>
+                                <TextBlock Text="Windows 10/11 x64 • .NET 8 Desktop Runtime • o banco sysmr.db é criado automaticamente no primeiro arranque." TextWrapping="Wrap" Foreground="{StaticResource MutedBrush}" Margin="0,8,0,0"/>
+                            </StackPanel>
+                        </Border>
+                        <Border Style="{StaticResource PanelCard}" Margin="0,0,0,14">
+                            <StackPanel>
+                                <TextBlock Text="Impressoras" FontSize="17" FontWeight="Bold"/>
+                                <TextBlock Text="Impressoras instaladas no Windows são reconhecidas abaixo, incluindo USB e rede. A impressora salva será pré-selecionada no diálogo de impressão; você também poderá escolher outra. Comprovantes térmicos usam layout comercial de 80 mm, não fiscal. A impressão ESC/POS direta ainda não está integrada." TextWrapping="Wrap" Margin="0,9,0,0"/>
+                                <DockPanel Margin="0,12,0,0">
+                                    <Button DockPanel.Dock="Right" Content="Atualizar lista" Margin="8,0,0,0" Click="RefreshPrinters_Click"/>
+                                    <ComboBox x:Name="PrinterCombo" Padding="8" SelectionChanged="PrinterCombo_SelectionChanged"/>
+                                </DockPanel>
+                                <Button Content="Salvar impressora selecionada" HorizontalAlignment="Left" Margin="0,9,0,0" Click="SavePrinter_Click"/>
+                                <TextBox x:Name="PrinterAddressBox" Margin="0,9,0,0" ToolTip="IP opcional da impressora térmica de rede"/>
+                            </StackPanel>
+                        </Border>
+                        <Border Style="{StaticResource PanelCard}" Margin="0,0,0,14">
+                            <StackPanel>
+                                <TextBlock Text="Fiscal e certificado digital" FontSize="17" FontWeight="Bold"/>
+                                <TextBlock Text="Instale o certificado A1 (.pfx) no repositório do Windows ou conecte o dispositivo A3. A emissão NFC-e e a contingência fiscal exigem configuração tributária e integração homologada; não são realizadas por esta versão inicial." TextWrapping="Wrap" Margin="0,9,0,0"/>
+                            </StackPanel>
+                        </Border>
+                        <Border x:Name="AdministratorSettingsPanel" Style="{StaticResource PanelCard}" Visibility="Collapsed">
+                            <StackPanel>
+                                <TextBlock Text="Sincronização em nuvem" FontSize="17" FontWeight="Bold"/>
+                                <TextBlock Text="Somente Super Admin. Configure o Firebase Authentication e os parâmetros públicos do projeto para login da loja." TextWrapping="Wrap" Margin="0,9,0,0"/>
+                                <TextBlock Text="Firebase Project ID" FontWeight="SemiBold" Margin="0,12,0,5"/>
+                                <TextBox x:Name="FirebaseProjectBox"/>
+                                <TextBlock Text="Web API Key (chave pública)" FontWeight="SemiBold" Margin="0,10,0,5"/>
+                                <TextBox x:Name="FirebaseApiKeyBox"/>
+                                <TextBlock Text="Realtime Database URL" FontWeight="SemiBold" Margin="0,10,0,5"/>
+                                <TextBox x:Name="FirebaseUrlBox"/>
+                                <TextBlock Text="URL da Cloud Function de provisionamento" FontWeight="SemiBold" Margin="0,10,0,5"/>
+                                <TextBox x:Name="FirebaseProvisioningUrlBox"/>
+                                <TextBlock Text="Nunca informe service-account JSON, senhas administrativas ou tokens. A Web API Key é pública; proteja os dados com regras do Firebase." Foreground="#B54708" TextWrapping="Wrap" Margin="0,8,0,0"/>
+                                <Button Content="Salvar parâmetros Firebase" HorizontalAlignment="Left" Background="#17233B" Foreground="White" Margin="0,10,0,0" Click="SaveFirebase_Click"/>
+                                <Separator Margin="0,18,0,14"/>
+                                <TextBlock Text="Formato da loja" FontSize="17" FontWeight="Bold"/>
+                                <TextBlock Text="Altere entre Lojista / PDV e Restaurante. O SYSMR será fechado ao confirmar; abra novamente para carregar a outra vertente." TextWrapping="Wrap" Foreground="{StaticResource MutedBrush}" Margin="0,6,0,10"/>
+                                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                    <TextBlock Text="Lojista / PDV" VerticalAlignment="Center" Margin="0,0,10,0"/>
+                                    <ToggleButton x:Name="StoreTypeToggle" Content="Restaurante" Padding="12,7" Click="StoreTypeToggle_Click"/>
+                                </StackPanel>
+                                <TextBlock Text="A troca exige internet, login online prévio e fila de sincronização vazia da vertente atual." Foreground="#B54708" TextWrapping="Wrap" Margin="0,8,0,0"/>
+                            </StackPanel>
+                        </Border>
+                    </StackPanel>
+                </ScrollViewer>
+
+                <ScrollViewer x:Name="HelpPage" Visibility="Collapsed" VerticalScrollBarVisibility="Auto">
+                    <StackPanel>
+                        <TextBlock Text="Ajuda e treinamento" Style="{StaticResource PageTitle}" Margin="0,0,0,5"/>
+                        <TextBlock Text="Guia rápido para operador e gestor" Foreground="{StaticResource MutedBrush}" Margin="0,0,0,18"/>
+                        <Border Style="{StaticResource PanelCard}" Margin="0,0,0,12">
+                            <StackPanel>
+                                <TextBlock Text="1. Abrindo o caixa" FontSize="17" FontWeight="Bold"/>
+                                <TextBlock Text="Entre com seu usuário, informe o valor de abertura (suprimento inicial) e confirme. O login e o fluxo completo de caixa serão habilitados no módulo de autenticação." TextWrapping="Wrap" Margin="0,8,0,0"/>
+                            </StackPanel>
+                        </Border>
+                        <Border Style="{StaticResource PanelCard}" Margin="0,0,0,12">
+                            <StackPanel>
+                                <TextBlock Text="2. Venda rápida" FontSize="17" FontWeight="Bold"/>
+                                <TextBlock Text="Bipe o código (o leitor USB deve enviar Enter) ou use F2 e pesquise o produto. F3 abre o cadastro de produto e inicia o ditado local do Windows no campo selecionado. F4 vai ao campo de cliente/CPF. F5 grava localmente a venda e baixa o estoque; a emissão NFC-e ainda não está integrada." TextWrapping="Wrap" Margin="0,8,0,0"/>
+                            </StackPanel>
+                        </Border>
+                        <Border Style="{StaticResource PanelCard}" Margin="0,0,0,12">
+                            <StackPanel>
+                                <TextBlock Text="3. Atalhos e operações" FontSize="17" FontWeight="Bold"/>
+                                <TextBlock Text="Enter confirma o código ou seleciona o produto. Esc solicita PIN do Super Admin antes de remover um item ou cancelar a venda. A barra superior mostra Venda, Vendas, Devoluções e Ajuda; entre como Super Admin para revelar as áreas protegidas. Ao finalizar cada venda, informe o vendedor responsável no pagamento." TextWrapping="Wrap" Margin="0,8,0,0"/>
+                            </StackPanel>
+                        </Border>
+                        <Border Style="{StaticResource PanelCard}" Margin="0,0,0,12">
+                            <StackPanel>
+                                <TextBlock Text="4. Fechamento de caixa" FontSize="17" FontWeight="Bold"/>
+                                <TextBlock Text="Confira dinheiro, Pix e cartões e compare com o relatório. A conferência cega e a impressão de fechamento serão disponibilizadas com o módulo de caixa." TextWrapping="Wrap" Margin="0,8,0,0"/>
+                            </StackPanel>
+                        </Border>
+                        <Border Style="{StaticResource PanelCard}">
+                            <StackPanel>
+                                <TextBlock Text="5. Clientes, devoluções e gestão" FontSize="17" FontWeight="Bold"/>
+                                <TextBlock Text="O cadastro do cliente é revisado a cada 30 dias. O vencimento gera alerta, mas não bloqueia a venda; use Renovar 30 dias após revisar. Em Vendas, selecione uma venda para abrir seus produtos e conferir o vendedor. A aba Devoluções está disponível ao lojista; selecione uma venda e informe as quantidades de um ou mais itens. O estoque e o caixa são atualizados, e a mesma venda pode receber novas devoluções até esgotar as quantidades disponíveis. Antes de vender, cadastre a equipe em Configurações; no pagamento, selecione um vendedor ativo da lista. O lojista pode consultar e editar o estoque. Clientes e auditoria exigem PIN do Super Admin; as configurações técnicas do Firebase ficam disponíveis dentro de Configurações após entrar como Super Admin." TextWrapping="Wrap" Margin="0,8,0,0"/>
+                            </StackPanel>
+                        </Border>
+                    </StackPanel>
+                </ScrollViewer>
+                <Grid x:Name="AuditPage" Visibility="Collapsed">
+                    <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+                    <DockPanel Margin="0,0,0,12">
+                        <StackPanel>
+                            <TextBlock Text="Log de ações" FontSize="21" FontWeight="Bold"/>
+                            <TextBlock Text="Registro local de vendas, devoluções e operações administrativas." Foreground="{StaticResource MutedBrush}" FontSize="11" Margin="0,3,0,0"/>
+                        </StackPanel>
+                        <TextBox x:Name="AuditSearchBox" Width="300" DockPanel.Dock="Right" ToolTip="Buscar por usuário, ação ou detalhe" TextChanged="AuditSearchBox_TextChanged"/>
+                    </DockPanel>
+                    <Border Grid.Row="1" Style="{StaticResource PanelCard}" Padding="0">
+                        <DataGrid x:Name="AuditGrid" IsReadOnly="True">
+                            <DataGrid.Columns>
+                                <DataGridTextColumn Header="DATA/HORA" Binding="{Binding CreatedAt, StringFormat={}{0:dd/MM/yyyy HH:mm:ss}}" Width="180"/>
+                                <DataGridTextColumn Header="USUÁRIO" Binding="{Binding Actor}" Width="160"/>
+                                <DataGridTextColumn Header="AÇÃO" Binding="{Binding Action}" Width="190"/>
+                                <DataGridTextColumn Header="DETALHES" Binding="{Binding Details}" Width="*"/>
+                            </DataGrid.Columns>
+                        </DataGrid>
+                    </Border>
+                </Grid>
+            </Grid>
+            <DockPanel Grid.Row="3" Margin="2,8,2,0">
+                <TextBlock x:Name="StatusText" Text="Pronto para venda" Foreground="{StaticResource MutedBrush}" FontSize="11"/>
+                <TextBlock DockPanel.Dock="Right" Text="F2 Busca   F3 Voz   F4 Cliente   F5 Pagamento   Esc Cancelar" Foreground="{StaticResource MutedBrush}" FontSize="11"/>
+            </DockPanel>
+        </Grid>
+    </Grid>
+</Window>

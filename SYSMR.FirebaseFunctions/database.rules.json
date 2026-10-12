@@ -1,0 +1,24 @@
+{
+  "rules": {
+    "clients": {
+      "$uid": {
+        ".read": "auth != null && auth.uid === $uid",
+        "storeType": {
+          ".write": "auth != null && auth.uid === $uid",
+          ".validate": "newData.val() === 'sales' || newData.val() === 'restaurant'"
+        },
+        "branches": {
+          "$branch": {
+            ".read": "auth != null && auth.uid === $uid && root.child('clients').child($uid).child('storeType').val() === $branch",
+            "events": {
+              "$eventId": {
+                ".write": "auth != null && auth.uid === $uid && root.child('clients').child($uid).child('storeType').val() === $branch && ($branch === 'sales' || $branch === 'restaurant')",
+                ".validate": "newData.hasChildren(['id', 'entity', 'entityId', 'createdAt', 'payload']) && newData.child('id').val() === $eventId"
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,17 @@
+<Window x:Class="SYSMR.UI.OperatorWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Identificação do vendedor" Width="450" Height="300" ResizeMode="NoResize"
+        WindowStartupLocation="CenterScreen" Background="#F3F6FA">
+    <Grid Margin="28">
+        <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+        <TextBlock Text="Quem está operando?" FontSize="24" FontWeight="Bold" Foreground="#17233B"/>
+        <TextBlock Grid.Row="1" Text="Informe o nome do vendedor. Ele ficará registrado nas vendas deste turno." TextWrapping="Wrap" Foreground="#748198" Margin="0,8,0,18"/>
+        <StackPanel Grid.Row="2">
+            <TextBlock Text="Nome do vendedor" FontWeight="SemiBold" Margin="0,0,0,5"/>
+            <TextBox x:Name="SellerNameBox" Padding="10" FontSize="16" KeyDown="SellerNameBox_KeyDown"/>
+        </StackPanel>
+        <TextBlock Grid.Row="3" Text="A identificação é informativa; contas individuais e autenticação de vendedores ainda não estão habilitadas." TextWrapping="Wrap" Foreground="#8A4B08" FontSize="11" VerticalAlignment="Top" Margin="0,14,0,0"/>
+        <Button Grid.Row="4" Content="Iniciar turno" HorizontalAlignment="Right" Background="#17233B" Foreground="White" Click="Start_Click"/>
+    </Grid>
+</Window>

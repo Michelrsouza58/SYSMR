@@ -1,0 +1,30 @@
+<Window x:Class="SYSMR.UI.RestaurantEntryWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="SYSMR" Width="460" Height="590" ResizeMode="NoResize"
+        WindowStartupLocation="CenterOwner" Background="#F3F6FA">
+    <Grid Margin="24">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+        <TextBlock x:Name="TitleText" Text="Informações" FontSize="22" FontWeight="Bold" Foreground="#17233B"/>
+        <StackPanel Grid.Row="1" Margin="0,16,0,12">
+            <TextBlock x:Name="LabelOne" Text="Campo 1" FontWeight="SemiBold" Margin="0,0,0,5"/>
+            <TextBox x:Name="ValueOne" Padding="9" Margin="0,0,0,10"/>
+            <TextBlock x:Name="LabelTwo" Text="Campo 2" FontWeight="SemiBold" Margin="0,0,0,5"/>
+            <TextBox x:Name="ValueTwo" Padding="9" Margin="0,0,0,10"/>
+            <TextBlock x:Name="LabelThree" Text="Campo 3" FontWeight="SemiBold" Margin="0,0,0,5"/>
+            <TextBox x:Name="ValueThree" Padding="9" Margin="0,0,0,10"/>
+            <TextBlock x:Name="LabelFour" Text="Campo 4" FontWeight="SemiBold" Margin="0,0,0,5"/>
+            <TextBox x:Name="ValueFour" Padding="9" Margin="0,0,0,10"/>
+            <TextBlock x:Name="LabelFive" Text="Campo 5" FontWeight="SemiBold" Margin="0,0,0,5"/>
+            <TextBox x:Name="ValueFive" Padding="9"/>
+        </StackPanel>
+        <StackPanel Grid.Row="2" Orientation="Horizontal" HorizontalAlignment="Right">
+            <Button Content="Cancelar" Margin="0,0,8,0" Padding="12,7" Click="Cancel_Click"/>
+            <Button Content="Confirmar" Background="#17233B" Foreground="White" Padding="14,7" Click="Confirm_Click"/>
+        </StackPanel>
+    </Grid>
+</Window>

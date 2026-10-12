@@ -1,0 +1,31 @@
+<Window x:Class="SYSMR.UI.PaymentWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Finalizar venda" Width="440" Height="440" ResizeMode="NoResize"
+        WindowStartupLocation="CenterOwner" Background="#F3F6FA">
+    <Grid Margin="24">
+        <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+        <TextBlock Text="Pagamento" FontSize="24" FontWeight="Bold" Foreground="#17233B"/>
+        <StackPanel Grid.Row="1" Margin="0,16,0,14">
+            <TextBlock Text="Total a pagar" Foreground="#748198"/>
+            <TextBlock x:Name="PaymentTotal" FontSize="28" FontWeight="Bold" Foreground="#18A999" Margin="0,3,0,0"/>
+        </StackPanel>
+        <StackPanel Grid.Row="2">
+            <TextBlock Text="Vendedor responsável (obrigatório)" Margin="0,0,0,7" FontWeight="SemiBold"/>
+            <ComboBox x:Name="SellerComboBox" Padding="10" Margin="0,0,0,14" KeyDown="SellerComboBox_KeyDown"/>
+            <TextBlock x:Name="SellerHint" Foreground="#B54708" FontSize="11" TextWrapping="Wrap" Margin="0,0,0,10" Visibility="Collapsed"/>
+            <TextBlock Text="Forma de pagamento" Margin="0,0,0,7" FontWeight="SemiBold"/>
+            <ComboBox x:Name="PaymentCombo" Padding="10" SelectedIndex="0">
+                <ComboBoxItem Content="Dinheiro"/>
+                <ComboBoxItem Content="Pix"/>
+                <ComboBoxItem Content="Cartão de débito"/>
+                <ComboBoxItem Content="Cartão de crédito"/>
+            </ComboBox>
+            <TextBlock Text="O registro será salvo localmente. NFC-e ainda não disponível." TextWrapping="Wrap" Foreground="#748198" FontSize="12" Margin="0,14,0,0"/>
+        </StackPanel>
+        <StackPanel Grid.Row="3" Orientation="Horizontal" HorizontalAlignment="Right">
+            <Button Content="Voltar" Margin="0,0,8,0" Click="Cancel_Click"/>
+            <Button Content="Confirmar pagamento" Background="#17233B" Foreground="White" Click="Confirm_Click"/>
+        </StackPanel>
+    </Grid>
+</Window>

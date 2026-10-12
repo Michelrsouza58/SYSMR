@@ -1,0 +1,79 @@
+<Window x:Class="SYSMR.UI.ProductEditorWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Cadastro de produto" Width="560" Height="720" ResizeMode="NoResize"
+        WindowStartupLocation="CenterOwner" Background="#F3F6FA">
+    <Grid Margin="24">
+        <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+        <StackPanel>
+            <TextBlock x:Name="TitleText" Text="Novo produto" FontSize="24" FontWeight="Bold" Foreground="#17233B"/>
+            <TextBlock Text="Preencha os dados básicos e a unidade usada no estoque e na venda." Foreground="#748198" TextWrapping="Wrap" Margin="0,6,0,16"/>
+        </StackPanel>
+        <DockPanel Grid.Row="1" Margin="0,0,0,10">
+            <Button DockPanel.Dock="Right" Content="🎙 Iniciar escuta" Padding="12,7" Background="#E5F6F2" Foreground="#12695D" Click="StartVoice_Click"/>
+            <ComboBox x:Name="VoiceFieldCombo" Padding="7" SelectedIndex="0" Margin="0,0,8,0">
+                <ComboBoxItem Content="Descrição"/>
+                <ComboBoxItem Content="Código de barras"/>
+                <ComboBoxItem Content="Unidade"/>
+                <ComboBoxItem Content="Preço de custo"/>
+                <ComboBoxItem Content="Preço de venda"/>
+                <ComboBoxItem Content="Estoque atual"/>
+                <ComboBoxItem Content="Estoque mínimo"/>
+                <ComboBoxItem Content="Categoria"/>
+                <ComboBoxItem Content="Código da balança"/>
+            </ComboBox>
+        </DockPanel>
+        <ScrollViewer Grid.Row="2" VerticalScrollBarVisibility="Auto">
+            <StackPanel>
+                <TextBlock Text="Descrição *" FontWeight="SemiBold" Margin="0,0,0,5"/>
+                <TextBox x:Name="NameBox" Margin="0,0,0,12"/>
+                <TextBlock Text="Código de barras" FontWeight="SemiBold" Margin="0,0,0,5"/>
+                <TextBox x:Name="BarcodeBox" Margin="0,0,0,12"/>
+                <TextBlock Text="Unidade de medida *" FontWeight="SemiBold" Margin="0,0,0,5"/>
+                <ComboBox x:Name="UnitCombo" Padding="8" IsEditable="True" Text="UN" Margin="0,0,0,12">
+                    <ComboBoxItem Content="UN"/>
+                    <ComboBoxItem Content="KG"/>
+                    <ComboBoxItem Content="G"/>
+                    <ComboBoxItem Content="L"/>
+                    <ComboBoxItem Content="ML"/>
+                    <ComboBoxItem Content="CX"/>
+                    <ComboBoxItem Content="PCT"/>
+                    <ComboBoxItem Content="M"/>
+                    <ComboBoxItem Content="PAR"/>
+                </ComboBox>
+                <Grid Margin="0,0,0,12">
+                    <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="12"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                    <StackPanel>
+                        <TextBlock Text="Preço de custo" FontWeight="SemiBold" Margin="0,0,0,5"/>
+                        <TextBox x:Name="CostBox" Text="0,00"/>
+                    </StackPanel>
+                    <StackPanel Grid.Column="2">
+                        <TextBlock Text="Preço de venda" FontWeight="SemiBold" Margin="0,0,0,5"/>
+                        <TextBox x:Name="PriceBox" Text="0,00"/>
+                    </StackPanel>
+                </Grid>
+                <Grid Margin="0,0,0,12">
+                    <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="12"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                    <StackPanel>
+                        <TextBlock Text="Estoque atual" FontWeight="SemiBold" Margin="0,0,0,5"/>
+                        <TextBox x:Name="StockBox" Text="0"/>
+                    </StackPanel>
+                    <StackPanel Grid.Column="2">
+                        <TextBlock Text="Alerta de estoque mínimo" FontWeight="SemiBold" Margin="0,0,0,5"/>
+                        <TextBox x:Name="MinimumStockBox" Text="2"/>
+                    </StackPanel>
+                </Grid>
+                <TextBlock Text="Categoria" FontWeight="SemiBold" Margin="0,0,0,5"/>
+                <TextBox x:Name="CategoryBox" Margin="0,0,0,12"/>
+                <TextBlock Text="Código da balança (5 dígitos)" FontWeight="SemiBold" Margin="0,0,0,5"/>
+                <TextBox x:Name="ScaleCodeBox" Margin="0,0,0,8"/>
+                <CheckBox x:Name="SoldByWeightCheck" Content="Produto vendido por peso" Margin="0,0,0,12"/>
+                <TextBlock x:Name="ErrorText" Foreground="#B42318" TextWrapping="Wrap"/>
+            </StackPanel>
+        </ScrollViewer>
+        <StackPanel Grid.Row="3" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,12,0,0">
+            <Button Content="Cancelar" Margin="0,0,8,0" Click="Cancel_Click"/>
+            <Button Content="Salvar produto" Background="#17233B" Foreground="White" Click="Save_Click"/>
+        </StackPanel>
+    </Grid>
+</Window>

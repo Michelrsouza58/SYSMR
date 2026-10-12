@@ -1,0 +1,24 @@
+<Window x:Class="SYSMR.UI.AdminPinWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Acesso Super Admin" Width="440" Height="400" ResizeMode="NoResize"
+        WindowStartupLocation="CenterOwner" Background="#F3F6FA">
+    <Grid Margin="28">
+        <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+        <TextBlock x:Name="TitleText" Text="Proteção Super Admin" FontSize="24" FontWeight="Bold" Foreground="#17233B"/>
+        <TextBlock x:Name="ExplanationText" Grid.Row="1" Text="Defina seu PIN privado. Ele protegerá configurações e cadastros administrativos." TextWrapping="Wrap" Foreground="#748198" Margin="0,8,0,16"/>
+        <StackPanel Grid.Row="2">
+            <TextBlock Text="PIN do Super Admin (mínimo 8 caracteres)" FontWeight="SemiBold" Margin="0,0,0,6"/>
+            <PasswordBox x:Name="PinBox" Padding="10" FontSize="15"/>
+        </StackPanel>
+        <StackPanel x:Name="ConfirmPanel" Grid.Row="3" Margin="0,12,0,0">
+            <TextBlock Text="Confirmar PIN" FontWeight="SemiBold" Margin="0,0,0,6"/>
+            <PasswordBox x:Name="ConfirmPinBox" Padding="10" FontSize="15"/>
+        </StackPanel>
+        <TextBlock x:Name="ErrorText" Grid.Row="4" Foreground="#B42318" TextWrapping="Wrap" Margin="0,10,0,0" VerticalAlignment="Top"/>
+        <StackPanel Grid.Row="5" Orientation="Horizontal" HorizontalAlignment="Right">
+            <Button x:Name="CancelButton" Content="Cancelar" Margin="0,0,8,0" Click="Cancel_Click"/>
+            <Button x:Name="SubmitButton" Content="Salvar PIN" Background="#17233B" Foreground="White" Click="Submit_Click"/>
+        </StackPanel>
+    </Grid>
+</Window>
