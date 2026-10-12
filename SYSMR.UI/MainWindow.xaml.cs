@@ -40,6 +40,7 @@ public partial class MainWindow : Window
     private string _receiptPhone = string.Empty;
     private string _receiptAddress = string.Empty;
     private string _receiptFooter = string.Empty;
+    private string _receiptFormat = "thermal80";
 
     public MainWindow(
         ProductCatalogService catalog,
@@ -86,6 +87,7 @@ public partial class MainWindow : Window
                 _receiptPhone = await _accessControl.GetSettingAsync("receipt.phone") ?? string.Empty;
                 _receiptAddress = await _accessControl.GetSettingAsync("receipt.address") ?? string.Empty;
                 _receiptFooter = await _accessControl.GetSettingAsync("receipt.footer") ?? string.Empty;
+                _receiptFormat = await _accessControl.GetSettingAsync("receipt.format") ?? "thermal80";
                 await RefreshCustomersAsync();
                 await RefreshSyncStatusAsync();
                 var syncTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(5) };
@@ -258,14 +260,17 @@ public partial class MainWindow : Window
             }
             return;
         }
-        var paymentWindow = new PaymentWindow(Total, sellers.Select(seller => seller.Name).ToArray()) { Owner = this };
+        var customer = CustomerSelector.SelectedItem as Customer;
+        var paymentWindow = new PaymentWindow(
+            Total,
+            sellers.Select(seller => seller.Name).ToArray(),
+            customer is not null) { Owner = this };
         if (paymentWindow.ShowDialog() != true)
             return;
 
         try
         {
             var items = _cart.Select(row => new SaleItem(row.ProductId, row.Name, row.Quantity, row.UnitPrice)).ToArray();
-            var customer = CustomerSelector.SelectedItem as Customer;
             var sellerName = paymentWindow.SellerName;
             var customerName = customer?.Name ?? "Consumidor final";
             var completedAt = DateTimeOffset.UtcNow;
@@ -279,13 +284,17 @@ public partial class MainWindow : Window
             CustomerSelector.SelectedItem = null;
             CustomerBox.Clear();
             RefreshCart();
-            StatusText.Text = "Venda salva localmente. NFC-e não emitida.";
+            StatusText.Text = paymentWindow.SelectedPayment == PaymentMethod.StoreCredit
+                ? "Nota salva localmente. O saldo será lançado no caixa conforme os recebimentos."
+                : "Venda salva localmente. NFC-e não emitida.";
             if (ManagerPage.Visibility == Visibility.Visible)
                 await RefreshManagerAsync();
             if (SalesPage.Visibility == Visibility.Visible)
                 await RefreshSalesAsync();
             MessageBox.Show(
-                "A venda foi salva no banco local e o estoque foi atualizado.\nA emissão da NFC-e ainda não está integrada.",
+                paymentWindow.SelectedPayment == PaymentMethod.StoreCredit
+                    ? "A nota foi salva no banco local, vinculada ao cliente e o estoque foi atualizado. Nenhum valor foi lançado no caixa."
+                    : "A venda foi salva no banco local e o estoque foi atualizado.\nA emissão da NFC-e ainda não está integrada.",
                 "Venda registrada",
                 MessageBoxButton.OK,
                 MessageBoxImage.Information);
@@ -300,10 +309,13 @@ public partial class MainWindow : Window
                     saleId,
                     customerName,
                     sellerName,
-                    paymentWindow.SelectedPayment.ToString(),
+                    GetPaymentLabel(paymentWindow.SelectedPayment),
                     completedAt,
                     items,
-                    items.Sum(item => item.Total));
+                    items.Sum(item => item.Total),
+                    paymentWindow.SelectedPayment == PaymentMethod.StoreCredit
+                        ? $"Valor original: {items.Sum(item => item.Total):C2}\nRecebido: {0:C2}\nSaldo em aberto: {items.Sum(item => item.Total):C2}"
+                        : null);
             }
             BarcodeBox.Focus();
         }
@@ -522,8 +534,10 @@ public partial class MainWindow : Window
 
     private async Task RefreshSalesAsync()
     {
-        SalesGrid.ItemsSource = await _sales.GetSalesAsync(SalesSearchBox.Text);
+        var customerId = (AccountCustomerCombo.SelectedItem as Customer)?.Id;
+        SalesGrid.ItemsSource = await _sales.GetSalesAsync(SalesSearchBox.Text, customerId: customerId);
         SaleDetailsGrid.ItemsSource = null;
+        await RefreshOpenAccountsAsync(customerId);
     }
 
     private async Task RefreshReturnsAsync()
@@ -538,8 +552,25 @@ public partial class MainWindow : Window
         var customers = await _customers.SearchAsync(string.Empty);
         CustomersGrid.ItemsSource = customers;
         CustomerSelector.ItemsSource = customers;
+        AccountCustomerCombo.ItemsSource = customers;
         var needsReview = customers.Count(customer => customer.NeedsReview);
         CustomerExpirySummary.Text = $"{customers.Count} clientes • {needsReview} precisam de revisão. Vencimento não bloqueia vendas.";
+    }
+
+    private async Task RefreshOpenAccountsAsync(Guid? customerId)
+    {
+        if (customerId is null)
+        {
+            OpenAccountsGrid.ItemsSource = null;
+            AccountBalanceSummary.Text = "Selecione um cliente para consultar notas em aberto.";
+            return;
+        }
+
+        var accounts = await _sales.GetOpenAccountsAsync(customerId.Value);
+        OpenAccountsGrid.ItemsSource = accounts;
+        AccountBalanceSummary.Text = accounts.Count == 0
+            ? "Este cliente não possui notas em aberto."
+            : $"{accounts.Count} nota(s) em aberto • saldo total {accounts.Sum(account => account.BalanceDue):C2}";
     }
 
     private async Task RefreshAuditAsync()
@@ -571,10 +602,12 @@ public partial class MainWindow : Window
         _receiptPhone = await _accessControl.GetSettingAsync("receipt.phone") ?? string.Empty;
         _receiptAddress = await _accessControl.GetSettingAsync("receipt.address") ?? string.Empty;
         _receiptFooter = await _accessControl.GetSettingAsync("receipt.footer") ?? string.Empty;
+        _receiptFormat = await _accessControl.GetSettingAsync("receipt.format") ?? "thermal80";
         ReceiptStoreNameBox.Text = _receiptStoreName;
         ReceiptPhoneBox.Text = _receiptPhone;
         ReceiptAddressBox.Text = _receiptAddress;
         ReceiptFooterBox.Text = _receiptFooter;
+        ReceiptFormatCombo.SelectedIndex = _receiptFormat == "a4signature" ? 1 : 0;
         SellersGrid.ItemsSource = await _sellers.GetAllAsync();
         UpdateSellerActions();
         FirebaseProjectBox.Text = await _accessControl.GetSettingAsync("firebase.projectId") ?? string.Empty;
@@ -601,6 +634,8 @@ public partial class MainWindow : Window
             await _accessControl.SetSettingAsync("receipt.phone", ReceiptPhoneBox.Text.Trim());
             await _accessControl.SetSettingAsync("receipt.address", ReceiptAddressBox.Text.Trim());
             await _accessControl.SetSettingAsync("receipt.footer", ReceiptFooterBox.Text.Trim());
+            _receiptFormat = ReceiptFormatCombo.SelectedIndex == 1 ? "a4signature" : "thermal80";
+            await _accessControl.SetSettingAsync("receipt.format", _receiptFormat);
             _receiptStoreName = storeName;
             _receiptPhone = ReceiptPhoneBox.Text.Trim();
             _receiptAddress = ReceiptAddressBox.Text.Trim();
@@ -720,6 +755,20 @@ public partial class MainWindow : Window
         }
     }
 
+    private async void AccountCustomerCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (!IsLoaded || SalesPage.Visibility != Visibility.Visible)
+            return;
+        try
+        {
+            await RefreshSalesAsync();
+        }
+        catch (Exception exception)
+        {
+            ShowOperationError("Não foi possível carregar as vendas e notas do cliente", exception);
+        }
+    }
+
     private async void SalesGrid_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
         if (SalesGrid.SelectedItem is SaleHistoryEntry selected)
@@ -735,6 +784,86 @@ public partial class MainWindow : Window
             }
         }
     }
+
+    private async void CollectAccountPayment_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not Button { Tag: OpenAccountEntry account })
+            return;
+
+        var paymentWindow = new AccountPaymentWindow(account) { Owner = this };
+        if (paymentWindow.ShowDialog() != true)
+            return;
+
+        try
+        {
+            await _sales.RegisterAccountPaymentAsync(
+                account.SaleId,
+                paymentWindow.Amount,
+                paymentWindow.SelectedPayment,
+                _isAdministratorSession ? "Super Admin" : _storeName);
+            StatusText.Text = $"Recebimento de {paymentWindow.Amount:C2} registrado no caixa.";
+            await RefreshSalesAsync();
+        }
+        catch (Exception exception)
+        {
+            ShowOperationError("Não foi possível registrar o recebimento da nota", exception);
+        }
+    }
+
+    private async void PrintAccountNote_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not Button { Tag: OpenAccountEntry account })
+            return;
+
+        try
+        {
+            var sale = await _sales.GetSaleAsync(account.SaleId);
+            if (sale is null)
+            {
+                StatusText.Text = "A nota selecionada não foi encontrada.";
+                return;
+            }
+            PrintReceipt(
+                "NOTA DE VENDA EM ABERTO — NÃO FISCAL",
+                sale.Summary.Id,
+                sale.Summary.Customer,
+                sale.Summary.SellerName,
+                "Conta / notinha",
+                sale.Summary.CreatedAt,
+                sale.Items,
+                sale.Summary.Total,
+                BuildAccountReceiptDetails(sale));
+        }
+        catch (Exception exception)
+        {
+            ShowOperationError("Não foi possível imprimir a nota em aberto", exception);
+        }
+    }
+
+    private static string BuildAccountReceiptDetails(SaleRecord sale)
+    {
+        var lines = new List<string>
+        {
+            $"Valor original: {sale.Summary.Total:C2}",
+            $"Recebido: {sale.Summary.AmountPaid:C2}"
+        };
+        lines.AddRange(sale.Payments.Select(payment =>
+            $"  {payment.PaidAt.ToLocalTime():dd/MM/yyyy HH:mm} • {payment.Amount:C2} • {GetPaymentLabel(payment.PaymentMethod)}"));
+        if (sale.Summary.AmountReturned > 0)
+            lines.Add($"Devolvido/abatido: {sale.Summary.AmountReturned:C2}");
+        lines.Add($"Saldo em aberto: {sale.Summary.BalanceDue:C2}");
+        return string.Join(Environment.NewLine, lines);
+    }
+
+    private static string GetPaymentLabel(PaymentMethod paymentMethod) => paymentMethod switch
+    {
+        PaymentMethod.Cash => "Dinheiro",
+        PaymentMethod.Pix => "Pix",
+        PaymentMethod.DebitCard => "Cartão de débito",
+        PaymentMethod.CreditCard => "Cartão de crédito",
+        PaymentMethod.StoreCredit => "Conta / notinha",
+        _ => paymentMethod.ToString()
+    };
 
     private async void ReturnsGrid_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
@@ -793,7 +922,10 @@ public partial class MainWindow : Window
                 sale.Summary.PaymentLabel,
                 sale.Summary.CreatedAt,
                 sale.Items,
-                sale.Summary.Total);
+                sale.Summary.Total,
+                sale.Summary.PaymentMethod == PaymentMethod.StoreCredit
+                    ? BuildAccountReceiptDetails(sale)
+                    : null);
         }
         catch (Exception exception)
         {
@@ -921,7 +1053,8 @@ public partial class MainWindow : Window
         string payment,
         DateTimeOffset createdAt,
         IReadOnlyCollection<SaleItem> items,
-        decimal total)
+        decimal total,
+        string? accountDetails = null)
     {
         var printDialog = new PrintDialog();
         if (!string.IsNullOrWhiteSpace(_selectedPrinter))
@@ -941,9 +1074,11 @@ public partial class MainWindow : Window
         {
             var document = CreateReceiptDocument(
                 title, transactionId, customer, seller, payment, createdAt, items, total,
-                _receiptStoreName, _receiptPhone, _receiptAddress, _receiptFooter);
-            var pageWidth = 80 * 96 / 25.4;
-            var pageHeight = Math.Max(420, (document.Blocks.Count * 42 + items.Count * 22) * 96 / 72);
+                _receiptStoreName, _receiptPhone, _receiptAddress, _receiptFooter,
+                _receiptFormat == "a4signature", accountDetails);
+            var isA4 = _receiptFormat == "a4signature";
+            var pageWidth = isA4 ? 8.27 * 96 : 80 * 96 / 25.4;
+            var pageHeight = isA4 ? 11.7 * 96 : Math.Max(420, (document.Blocks.Count * 42 + items.Count * 22) * 96 / 72);
             document.PageWidth = pageWidth;
             document.PageHeight = pageHeight;
             document.ColumnWidth = pageWidth - document.PagePadding.Left - document.PagePadding.Right;
@@ -968,14 +1103,16 @@ public partial class MainWindow : Window
         string storeName,
         string phone,
         string address,
-        string footer)
+        string footer,
+        bool isA4,
+        string? accountDetails)
     {
         var document = new FlowDocument
         {
             FontFamily = new FontFamily("Segoe UI"),
-            FontSize = 9,
-            PagePadding = new Thickness(14, 12, 14, 16),
-            ColumnWidth = 80 * 96 / 25.4 - 28
+            FontSize = isA4 ? 11 : 9,
+            PagePadding = isA4 ? new Thickness(48) : new Thickness(14, 12, 14, 16),
+            ColumnWidth = (isA4 ? 8.27 * 96 : 80 * 96 / 25.4) - (isA4 ? 96 : 28)
         };
         document.Blocks.Add(new Paragraph(new Run(storeName))
         {
@@ -1050,6 +1187,16 @@ public partial class MainWindow : Window
             Padding = new Thickness(0, 8, 0, 0),
             Margin = new Thickness(0, 7, 0, 0)
         });
+        if (!string.IsNullOrWhiteSpace(accountDetails))
+        {
+            foreach (var line in accountDetails.Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries))
+            {
+                document.Blocks.Add(new Paragraph(new Run(line.Trim()))
+                {
+                    Margin = new Thickness(0, 1, 0, 1)
+                });
+            }
+        }
         document.Blocks.Add(new Paragraph(new Run(string.IsNullOrWhiteSpace(footer) ? "Obrigado pela preferência!" : footer))
         {
             FontSize = 10,
@@ -1064,6 +1211,26 @@ public partial class MainWindow : Window
             TextAlignment = TextAlignment.Center,
             Margin = new Thickness(0, 5, 0, 0)
         });
+        if (isA4)
+        {
+            document.Blocks.Add(new Paragraph(new Run("Assinatura do cliente:"))
+            {
+                FontSize = 11,
+                Margin = new Thickness(0, 36, 0, 4)
+            });
+            document.Blocks.Add(new Paragraph(new Run(" "))
+            {
+                BorderBrush = Brushes.Gray,
+                BorderThickness = new Thickness(0, 0, 0, 1),
+                Margin = new Thickness(0, 12, 0, 0),
+                Padding = new Thickness(0, 0, 0, 8)
+            });
+            document.Blocks.Add(new Paragraph(new Run("Documento: ______________________________    Data: ____/____/________"))
+            {
+                FontSize = 10,
+                Margin = new Thickness(0, 8, 0, 0)
+            });
+        }
         return document;
     }
 

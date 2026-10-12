@@ -5,7 +5,8 @@ public enum PaymentMethod
     Cash,
     Pix,
     DebitCard,
-    CreditCard
+    CreditCard,
+    StoreCredit
 }
 
 public sealed record SaleItem(Guid ProductId, string ProductName, decimal Quantity, decimal UnitPrice)
@@ -28,6 +29,8 @@ public sealed class Sale
             throw new ArgumentException("A venda precisa conter ao menos um item.", nameof(items));
         if (items.Any(item => item.Quantity <= 0 || item.UnitPrice < 0))
             throw new ArgumentException("A venda contem itens invalidos.", nameof(items));
+        if (paymentMethod == PaymentMethod.StoreCredit && customerId is null)
+            throw new ArgumentException("Uma venda em conta precisa estar vinculada a um cliente cadastrado.", nameof(customerId));
 
         Id = id;
         CreatedAt = createdAt;

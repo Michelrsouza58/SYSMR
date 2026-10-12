@@ -6,10 +6,15 @@ namespace SYSMR.UI;
 
 public partial class PaymentWindow : Window
 {
-    public PaymentWindow(decimal total, IReadOnlyList<string> sellers)
+    public PaymentWindow(decimal total, IReadOnlyList<string> sellers, bool hasRegisteredCustomer = false)
     {
         InitializeComponent();
         PaymentTotal.Text = total.ToString("C2");
+        StoreCreditItem.IsEnabled = hasRegisteredCustomer;
+        StoreCreditHint.Text = hasRegisteredCustomer
+            ? "A venda em conta exige um cliente cadastrado e não entra no caixa até o recebimento."
+            : "Selecione um cliente cadastrado no PDV para liberar a opção de conta.";
+        StoreCreditHint.Visibility = Visibility.Visible;
         SellerComboBox.ItemsSource = sellers;
         if (sellers.Count > 0)
             SellerComboBox.SelectedIndex = 0;
@@ -49,8 +54,15 @@ public partial class PaymentWindow : Window
             1 => PaymentMethod.Pix,
             2 => PaymentMethod.DebitCard,
             3 => PaymentMethod.CreditCard,
+            4 when StoreCreditItem.IsEnabled => PaymentMethod.StoreCredit,
             _ => PaymentMethod.Cash
         };
+        if (PaymentCombo.SelectedIndex == 4 && !StoreCreditItem.IsEnabled)
+        {
+            MessageBox.Show("Selecione um cliente cadastrado no PDV antes de abrir uma conta.",
+                "Cliente obrigatório", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
         DialogResult = true;
     }
 

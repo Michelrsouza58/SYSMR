@@ -74,6 +74,14 @@ public sealed class SqliteDatabase(string databasePath)
                 UnitPrice TEXT NOT NULL,
                 Total TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS SalePayments (
+                Id TEXT PRIMARY KEY,
+                SaleId TEXT NOT NULL REFERENCES Sales(Id),
+                PaidAt TEXT NOT NULL,
+                PaymentMethod TEXT NOT NULL,
+                Amount TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS IX_SalePayments_SaleId ON SalePayments(SaleId, PaidAt);
             CREATE TABLE IF NOT EXISTS Returns (
                 Id TEXT PRIMARY KEY,
                 SaleId TEXT NOT NULL UNIQUE REFERENCES Sales(Id),
