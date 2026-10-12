@@ -84,6 +84,107 @@ public sealed class OfflineWorkflowTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task CustomerAccountSupportsPartialAndFinalPaymentsWithoutPrematureCashIncome()
+    {
+        var milk = await _products.FindByBarcodeAsync("7891000100103");
+        Assert.NotNull(milk);
+        var customer = new Customer(
+            Guid.NewGuid(), "Cliente de teste", "", "", "",
+            DateTimeOffset.UtcNow, DateTimeOffset.UtcNow.AddDays(30));
+        await new SqliteCustomerRepository(_database).SaveAsync(customer);
+        var service = new SalesService(_sales);
+        var saleId = await service.CompleteAsync(
+            [new SaleItem(milk.Id, milk.Name, 2m, milk.SalePrice)],
+            PaymentMethod.StoreCredit,
+            customer.Document,
+            customer.Id,
+            "Vendedor A");
+
+        var openAccount = Assert.Single(await service.GetOpenAccountsAsync(customer.Id));
+        Assert.Equal(10.98m, openAccount.BalanceDue);
+        Assert.Single(await service.GetSalesAsync("Vendedor A", customerId: customer.Id));
+        await using (var connection = _database.CreateConnection())
+        {
+            await connection.OpenAsync();
+            await using var cashMovementCount = connection.CreateCommand();
+            cashMovementCount.CommandText = "SELECT COUNT(*) FROM CashMovements;";
+            Assert.Equal(0L, await cashMovementCount.ExecuteScalarAsync());
+        }
+
+        await service.RegisterAccountPaymentAsync(saleId, 3.50m, PaymentMethod.Pix, "Operador");
+        var partialBalance = Assert.Single(await service.GetOpenAccountsAsync(customer.Id));
+        Assert.Equal(7.48m, partialBalance.BalanceDue);
+        var partialRecord = await service.GetSaleAsync(saleId);
+        Assert.NotNull(partialRecord);
+        Assert.Equal(3.50m, partialRecord.Summary.AmountPaid);
+        Assert.Equal(7.48m, partialRecord.Summary.BalanceDue);
+        Assert.Single(partialRecord.Payments);
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            service.RegisterAccountPaymentAsync(saleId, 7.49m, PaymentMethod.Cash, "Operador"));
+        Assert.Equal(7.48m, Assert.Single(await service.GetOpenAccountsAsync(customer.Id)).BalanceDue);
+
+        await service.RegisterAccountPaymentAsync(saleId, 7.48m, PaymentMethod.Cash, "Operador");
+        Assert.Empty(await service.GetOpenAccountsAsync(customer.Id));
+        var paidRecord = await service.GetSaleAsync(saleId);
+        Assert.NotNull(paidRecord);
+        Assert.Equal(10.98m, paidRecord.Summary.AmountPaid);
+        Assert.Equal(0m, paidRecord.Summary.BalanceDue);
+        Assert.Equal(2, paidRecord.Payments.Count);
+        Assert.Equal(2, (await new SqliteSyncOutboxRepository(_database).GetPendingAsync())
+            .Count(item => item.Entity == "account-payment"));
+
+        await using var ledgerConnection = _database.CreateConnection();
+        await ledgerConnection.OpenAsync();
+        await using var ledger = ledgerConnection.CreateCommand();
+        ledger.CommandText = "SELECT Amount FROM CashMovements ORDER BY rowid;";
+        await using var ledgerReader = await ledger.ExecuteReaderAsync();
+        Assert.True(await ledgerReader.ReadAsync());
+        Assert.Equal("3.50", ledgerReader.GetString(0));
+        Assert.True(await ledgerReader.ReadAsync());
+        Assert.Equal("7.48", ledgerReader.GetString(0));
+        Assert.False(await ledgerReader.ReadAsync());
+    }
+
+    [Fact]
+    public async Task ReturnOnCustomerAccountReducesDebtBeforeRefundingCash()
+    {
+        var milk = await _products.FindByBarcodeAsync("7891000100103");
+        Assert.NotNull(milk);
+        var customer = new Customer(
+            Guid.NewGuid(), "Cliente devolução", "", "", "",
+            DateTimeOffset.UtcNow, DateTimeOffset.UtcNow.AddDays(30));
+        await new SqliteCustomerRepository(_database).SaveAsync(customer);
+        var service = new SalesService(_sales);
+        var saleId = await service.CompleteAsync(
+            [new SaleItem(milk.Id, milk.Name, 2m, milk.SalePrice)],
+            PaymentMethod.StoreCredit,
+            null,
+            customerId: customer.Id);
+
+        var sale = await service.GetSaleAsync(saleId);
+        Assert.NotNull(sale);
+        await service.ReturnSaleAsync(saleId, [sale.Items[0] with { Quantity = 1m }]);
+        var openNote = Assert.Single(await service.GetOpenAccountsAsync(customer.Id));
+        Assert.Equal(5.49m, openNote.BalanceDue);
+
+        await service.RegisterAccountPaymentAsync(saleId, 2m, PaymentMethod.Cash, "Operador");
+        await service.ReturnSaleAsync(saleId, [sale.Items[0] with { Quantity = 1m }]);
+        Assert.Empty(await service.GetOpenAccountsAsync(customer.Id));
+
+        await using var connection = _database.CreateConnection();
+        await connection.OpenAsync();
+        await using var movementCommand = connection.CreateCommand();
+        movementCommand.CommandText = "SELECT Type, Amount FROM CashMovements ORDER BY rowid;";
+        await using var movementReader = await movementCommand.ExecuteReaderAsync();
+        Assert.True(await movementReader.ReadAsync());
+        Assert.Equal("AccountPayment", movementReader.GetString(0));
+        Assert.Equal("2", movementReader.GetString(1));
+        Assert.True(await movementReader.ReadAsync());
+        Assert.Equal("Refund", movementReader.GetString(0));
+        Assert.Equal("-2.00", movementReader.GetString(1));
+    }
+
+    [Fact]
     public async Task SellersAreSavedAndOnlyActiveSellersAreAvailableForSales()
     {
         var sellers = new SqliteSellerRepository(_database);

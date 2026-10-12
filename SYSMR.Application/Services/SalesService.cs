@@ -25,11 +25,27 @@ public sealed class SalesService(ISaleRepository sales)
     public Task<int> GetSalesCountAsync(CancellationToken cancellationToken = default) =>
         sales.GetSalesCountAsync(cancellationToken);
 
-    public Task<IReadOnlyList<SaleHistoryEntry>> GetSalesAsync(string query, CancellationToken cancellationToken = default) =>
-        sales.GetSalesAsync(query, cancellationToken);
+    public Task<IReadOnlyList<SaleHistoryEntry>> GetSalesAsync(
+        string query,
+        CancellationToken cancellationToken = default,
+        Guid? customerId = null) =>
+        sales.GetSalesAsync(query, cancellationToken, customerId);
 
     public Task<SaleRecord?> GetSaleAsync(Guid saleId, CancellationToken cancellationToken = default) =>
         sales.GetSaleAsync(saleId, cancellationToken);
+
+    public Task<IReadOnlyList<OpenAccountEntry>> GetOpenAccountsAsync(
+        Guid customerId,
+        CancellationToken cancellationToken = default) =>
+        sales.GetOpenAccountsAsync(customerId, cancellationToken);
+
+    public Task RegisterAccountPaymentAsync(
+        Guid saleId,
+        decimal amount,
+        PaymentMethod paymentMethod,
+        string actor,
+        CancellationToken cancellationToken = default) =>
+        sales.RegisterAccountPaymentAsync(saleId, amount, paymentMethod, DateTimeOffset.UtcNow, actor, cancellationToken);
 
     public Task ReturnSaleAsync(
         Guid saleId,
