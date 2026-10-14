@@ -129,8 +129,20 @@ public partial class RestaurantWindow : Window
                 await RefreshCashAsync();
                 await RefreshSyncStatusAsync();
                 var syncTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(5) };
-                syncTimer.Tick += async (_, _) => await RefreshSyncStatusAsync();
+                syncTimer.Tick += async (_, _) =>
+                {
+                    await RefreshSyncStatusAsync();
+                    try
+                    {
+                        await RefreshTablesAsync();
+                    }
+                    catch (Exception exception)
+                    {
+                        AreaStatusText.Text = $"Falha ao atualizar as mesas: {exception.Message}";
+                    }
+                };
                 syncTimer.Start();
+                Closed += (_, _) => syncTimer.Stop();
             }
             catch (Exception exception)
             {
@@ -201,19 +213,27 @@ public partial class RestaurantWindow : Window
     {
         _loadingAreas = true;
         var areas = await _restaurant.GetAreasAsync();
-        AreaCombo.ItemsSource = areas;
+        var activeAreas = areas.Where(area => area.IsActive).ToArray();
+        AreaCombo.ItemsSource = activeAreas;
         SettingsAreasGrid.ItemsSource = areas;
-        var selected = areas.FirstOrDefault(area => area.Id == selectedAreaId) ?? areas.FirstOrDefault();
+        var selected = activeAreas.FirstOrDefault(area => area.Id == selectedAreaId) ?? activeAreas.FirstOrDefault();
         AreaCombo.SelectedItem = selected;
-        SettingsAreasGrid.SelectedItem = selected;
+        SettingsAreasGrid.SelectedItem =
+            areas.FirstOrDefault(area => area.Id == selectedAreaId) ?? areas.FirstOrDefault();
         _loadingAreas = false;
+        UpdateAreaActionButton();
         if (selected is not null)
             await RefreshTablesAsync();
+        else
+        {
+            TablesItems.ItemsSource = Array.Empty<RestaurantTableRecord>();
+            AreaStatusText.Text = "Nenhuma área ativa.";
+        }
     }
 
     private async Task RefreshTablesAsync()
     {
-        if (AreaCombo.SelectedItem is not RestaurantAreaRecord area)
+        if (AreaCombo.SelectedItem is not RestaurantAreaRecord { IsActive: true } area)
             return;
         var tables = await _restaurant.GetTablesAsync(area.Id);
         TablesItems.ItemsSource = tables;
@@ -284,8 +304,15 @@ public partial class RestaurantWindow : Window
 
     private async void ShowEmployees_Click(object sender, RoutedEventArgs e)
     {
-        ShowPage("Employees");
-        await RefreshEmployeesAsync();
+        try
+        {
+            await RefreshEmployeesAsync();
+            ShowPage("Employees");
+        }
+        catch (Exception exception)
+        {
+            ShowError("Não foi possível carregar a lista de funcionários", exception);
+        }
     }
 
     private async void ShowCash_Click(object sender, RoutedEventArgs e)
@@ -400,6 +427,51 @@ public partial class RestaurantWindow : Window
         {
             ShowError("Não foi possível configurar a quantidade de mesas", exception);
         }
+    }
+
+    private async void ToggleArea_Click(object sender, RoutedEventArgs e)
+    {
+        if (SettingsAreasGrid.SelectedItem is not RestaurantAreaRecord area)
+        {
+            FooterStatus.Text = "Selecione uma área para ativar ou desativar.";
+            return;
+        }
+
+        var newIsActive = !area.IsActive;
+        var action = newIsActive ? "reativar" : "desativar";
+        var status = newIsActive ? "reativada" : "desativada";
+        var confirmation = newIsActive
+            ? $"Reativar a área “{area.Name}” e suas mesas?"
+            : $"Desativar a área “{area.Name}”?\n\nA área e suas mesas serão ocultadas do webapp e continuarão no histórico. Áreas com comandas abertas não podem ser desativadas.";
+        if (MessageBox.Show(
+                confirmation,
+                "Confirmar alteração da área",
+                MessageBoxButton.YesNo,
+                newIsActive ? MessageBoxImage.Question : MessageBoxImage.Warning) != MessageBoxResult.Yes)
+            return;
+
+        try
+        {
+            await _restaurant.SetAreaActiveAsync(area.Id, newIsActive);
+            await RefreshAreasAsync(area.Id);
+            FooterStatus.Text = $"Área {area.Name} {status}.";
+        }
+        catch (Exception exception)
+        {
+            ShowError($"Não foi possível {action} a área", exception);
+        }
+    }
+
+    private void SettingsAreasGrid_SelectionChanged(object sender, SelectionChangedEventArgs e) =>
+        UpdateAreaActionButton();
+
+    private void UpdateAreaActionButton()
+    {
+        if (ToggleAreaButton is not null)
+            ToggleAreaButton.Content =
+                (SettingsAreasGrid.SelectedItem as RestaurantAreaRecord)?.IsActive == true
+                    ? "Desativar área"
+                    : "Reativar área";
     }
 
     private async void NewMenuItem_Click(object sender, RoutedEventArgs e)
@@ -607,27 +679,64 @@ public partial class RestaurantWindow : Window
 
     private async Task SaveEmployeeAsync(RestaurantEmployeeRecord? existing)
     {
-        var dialog = new RestaurantEntryWindow(
-            existing is null ? "Novo funcionário" : "Editar funcionário",
-            ["Nome", "Função"]) { Owner = this };
-        if (existing is not null)
-            dialog.Loaded += (_, _) =>
-            {
-                dialog.ValueOne.Text = existing.Name;
-                dialog.ValueTwo.Text = existing.Role;
-            };
+        var areas = (await _restaurant.GetAreasAsync())
+            .Where(area => area.IsActive)
+            .ToArray();
+        var dialog = new WaiterAccountWindow(existing, areas) { Owner = this };
         if (dialog.ShowDialog() != true)
             return;
+
+        var employee = new RestaurantEmployeeRecord(
+            existing?.Id ?? Guid.NewGuid(),
+            dialog.EmployeeName,
+            dialog.EmployeeRole,
+            existing?.IsActive ?? true,
+            dialog.WaiterNumber,
+            existing?.FirebaseUid,
+            string.Join(',', dialog.SelectedAreaIds));
         try
         {
-            await _restaurant.SaveEmployeeAsync(new RestaurantEmployeeRecord(
-                existing?.Id ?? Guid.NewGuid(), dialog.Values[0], dialog.Values[1], existing?.IsActive ?? true));
+            var refreshToken = await _localAccounts.GetRefreshTokenAsync()
+                               ?? throw new InvalidOperationException(
+                                   "Faça login online como lojista para cadastrar o acesso Firebase do garçom.");
+            var firebase = new FirebaseStoreAccountClient(_accessControl);
+
+            if (!employee.HasWebAccess)
+                await _restaurant.SaveEmployeeAsync(employee);
+
+            var provisioning = await firebase.CreateOrUpdateWaiterAccountAsync(
+                _storeAccount,
+                refreshToken,
+                employee,
+                dialog.SelectedAreaIds,
+                existing?.HasWebAccess == true ? null : dialog.InitialPassword);
+            await _syncOutbox.UpdateRefreshTokenAsync(provisioning.StoreRefreshToken);
+
+            employee = employee with { FirebaseUid = provisioning.FirebaseUid };
+            await _restaurant.SaveEmployeeAsync(employee);
             await RefreshEmployeesAsync();
-            FooterStatus.Text = "Funcionário salvo.";
+            FooterStatus.Text = $"Acesso web do garçom {employee.WaiterNumber} salvo.";
+            MessageBox.Show(
+                $"Funcionário cadastrado para acessar o webapp.\n\nCódigo da loja: {FirebaseStoreAccountClient.CreateWaiterStoreSlug(_storeAccount.CustomerNumber)}\nNúmero do garçom: {employee.WaiterNumber}\n\nA senha inicial não é exibida nem salva no computador; entregue-a ao funcionário por um canal seguro.",
+                "Acesso do garçom criado",
+                MessageBoxButton.OK,
+                MessageBoxImage.Information);
         }
         catch (Exception exception)
         {
-            ShowError("Não foi possível salvar o funcionário", exception);
+            ShowError("Não foi possível cadastrar/sincronizar o acesso do garçom", exception);
+            try
+            {
+                await RefreshEmployeesAsync();
+            }
+            catch (Exception refreshException)
+            {
+                ShowError("Não foi possível atualizar a lista de funcionários", refreshException);
+            }
+        }
+        finally
+        {
+            dialog.ClearPassword();
         }
     }
 
@@ -637,8 +746,30 @@ public partial class RestaurantWindow : Window
             return;
         try
         {
-            await _restaurant.SaveEmployeeAsync(employee with { IsActive = !employee.IsActive });
+            var updatedEmployee = employee with { IsActive = !employee.IsActive };
+            if (employee.HasWebAccess)
+            {
+                var refreshToken = await _localAccounts.GetRefreshTokenAsync()
+                                   ?? throw new InvalidOperationException(
+                                       "Faça login online como lojista para alterar o acesso web do funcionário.");
+                var areaIds = employee.AreaIds?
+                    .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                    .Select(Guid.Parse)
+                    .ToArray() ?? [];
+                var provisioning = await new FirebaseStoreAccountClient(_accessControl)
+                    .CreateOrUpdateWaiterAccountAsync(
+                        _storeAccount,
+                        refreshToken,
+                        updatedEmployee,
+                        areaIds,
+                        initialPassword: null);
+                await _syncOutbox.UpdateRefreshTokenAsync(provisioning.StoreRefreshToken);
+            }
+            await _restaurant.SaveEmployeeAsync(updatedEmployee);
             await RefreshEmployeesAsync();
+            FooterStatus.Text = updatedEmployee.IsActive
+                ? "Funcionário ativado e acesso web liberado."
+                : "Funcionário desativado e acesso web revogado.";
         }
         catch (Exception exception)
         {

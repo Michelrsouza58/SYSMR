@@ -3,6 +3,7 @@ using System.Windows.Controls;
 using System.Windows.Documents;
 using System.Windows.Media;
 using System.Globalization;
+using System.Windows.Threading;
 using SYSMR.Application.Models;
 using SYSMR.Domain.Entities;
 using SYSMR.Infrastructure.Persistence;
@@ -13,7 +14,10 @@ public partial class RestaurantOrderWindow : Window
 {
     private readonly SqliteRestaurantRepository _restaurant;
     private readonly RestaurantTableRecord _table;
+    private IReadOnlyList<RestaurantEmployeeRecord> _employees = [];
     private RestaurantOrderRecord? _order;
+    private DispatcherTimer? _orderRefreshTimer;
+    private bool _refreshingOrder;
 
     public RestaurantOrderWindow(
         SqliteRestaurantRepository restaurant,
@@ -23,9 +27,20 @@ public partial class RestaurantOrderWindow : Window
         InitializeComponent();
         _restaurant = restaurant;
         _table = table;
+        _employees = employees;
         TitleText.Text = $"Comanda • Mesa {table.Number}";
         EmployeeCombo.ItemsSource = employees;
-        Loaded += async (_, _) => await LoadOrderAsync(employees);
+        Loaded += async (_, _) =>
+        {
+            await LoadOrderAsync(employees);
+            if (IsLoaded)
+            {
+                _orderRefreshTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(5) };
+                _orderRefreshTimer.Tick += async (_, _) => await RefreshOrderFromSyncAsync();
+                _orderRefreshTimer.Start();
+            }
+        };
+        Closed += (_, _) => _orderRefreshTimer?.Stop();
     }
 
     private async Task LoadOrderAsync(IReadOnlyList<RestaurantEmployeeRecord> employees)
@@ -53,8 +68,10 @@ public partial class RestaurantOrderWindow : Window
         }
     }
 
-    private async Task RefreshOrderAsync()
+    private async Task RefreshOrderAsync(bool preservePaymentAmount = false)
     {
+        var previousOrder = _order;
+        var previousPaymentText = PaymentAmountBox.Text;
         _order = await _restaurant.GetOpenOrderAsync(_table.Id);
         if (_order is null)
         {
@@ -69,16 +86,40 @@ public partial class RestaurantOrderWindow : Window
             return;
         }
         ItemsGrid.ItemsSource = _order.Items;
+        EmployeeCombo.SelectedItem = _employees.FirstOrDefault(employee => employee.Name == _order.EmployeeName);
         EmployeeCombo.IsEnabled = _order.Items.Count == 0;
         WaiterServiceChargeCheckBox.IsChecked = _order.WaiterServiceChargeEnabled;
         WaiterServiceChargeCheckBox.IsEnabled = _order.PaidTotal == 0;
         ServiceChargeText.Text = $"10% do garçom: {_order.WaiterServiceCharge:C2}";
         TotalText.Text = $"Consumo: {_order.Subtotal:C2} • Total: {_order.Total:C2}";
         BalanceText.Text = $"Saldo: {_order.RemainingTotal:C2}";
-        PaymentAmountBox.Text = _order.RemainingTotal.ToString("N2", System.Globalization.CultureInfo.CurrentCulture);
+        var paymentMatchesPreviousBalance = previousOrder is not null &&
+            RestaurantEntryWindow.TryReadAmount(previousPaymentText, out var enteredAmount) &&
+            enteredAmount == previousOrder.RemainingTotal;
+        if (!preservePaymentAmount || paymentMatchesPreviousBalance)
+            PaymentAmountBox.Text = _order.RemainingTotal.ToString("N2", System.Globalization.CultureInfo.CurrentCulture);
         StatusText.Text = string.IsNullOrWhiteSpace(_order.EmployeeName)
             ? $"Aberta em {_order.OpenedAt.ToLocalTime():dd/MM/yyyy HH:mm}"
             : $"Atendente: {_order.EmployeeName} • aberta em {_order.OpenedAt.ToLocalTime():HH:mm}";
+    }
+
+    private async Task RefreshOrderFromSyncAsync()
+    {
+        if (_refreshingOrder || !IsLoaded)
+            return;
+        _refreshingOrder = true;
+        try
+        {
+            await RefreshOrderAsync(preservePaymentAmount: true);
+        }
+        catch (Exception exception)
+        {
+            StatusText.Text = $"Falha ao atualizar a comanda: {exception.Message}";
+        }
+        finally
+        {
+            _refreshingOrder = false;
+        }
     }
 
     private void WaiterServiceCharge_Click(object sender, RoutedEventArgs e)
@@ -140,8 +181,10 @@ public partial class RestaurantOrderWindow : Window
                 _table.Id,
                 item.Id,
                 quantity,
-                (EmployeeCombo.SelectedItem as RestaurantEmployeeRecord)?.Id);
+                (EmployeeCombo.SelectedItem as RestaurantEmployeeRecord)?.Id,
+                ObservationBox.Text);
             QuantityBox.Text = "1";
+            ObservationBox.Clear();
             await RefreshOrderAsync();
         }
         catch (Exception exception)
@@ -236,9 +279,12 @@ public partial class RestaurantOrderWindow : Window
             var printableWidth = printDialog.PrintableAreaWidth > 0
                 ? printDialog.PrintableAreaWidth
                 : 280;
+            var observationsHeight = _order.Items.Sum(item =>
+                string.IsNullOrWhiteSpace(item.Observation) ? 0 : 24 + item.Observation.Length / 42 * 12);
+            var estimatedPageHeight = Math.Max(300, 260 + 54 * _order.Items.Count + observationsHeight);
             var pageHeight = printDialog.PrintableAreaHeight > 0
-                ? Math.Min(printDialog.PrintableAreaHeight, Math.Max(300, 260 + 54 * _order.Items.Count))
-                : Math.Max(300, 260 + 54 * _order.Items.Count);
+                ? Math.Min(printDialog.PrintableAreaHeight, estimatedPageHeight)
+                : estimatedPageHeight;
             var ink = new SolidColorBrush(Color.FromRgb(23, 35, 59));
             var accent = new SolidColorBrush(Color.FromRgb(24, 169, 153));
             var muted = new SolidColorBrush(Color.FromRgb(104, 119, 143));
@@ -313,7 +359,7 @@ public partial class RestaurantOrderWindow : Window
             foreach (var item in _order.Items)
             {
                 var row = new TableRow();
-                row.Cells.Add(CreateTicketCell(item.Name, null, ink, muted, TextAlignment.Left));
+                row.Cells.Add(CreateKitchenItemCell(item, ink, muted, separator));
                 row.Cells.Add(CreateTicketCell(
                     "× " + item.Quantity.ToString("0.##", CultureInfo.GetCultureInfo("pt-BR")),
                     null,
@@ -396,6 +442,38 @@ public partial class RestaurantOrderWindow : Window
                 Foreground = primaryBrush,
                 Margin = new Thickness(0),
                 TextAlignment = alignment
+            });
+        }
+        return cell;
+    }
+
+    private static TableCell CreateKitchenItemCell(
+        RestaurantOrderItemRecord item,
+        Brush itemBrush,
+        Brush observationBrush,
+        Brush borderBrush)
+    {
+        var cell = new TableCell
+        {
+            Padding = new Thickness(4, 6, 4, 6),
+            BorderBrush = borderBrush,
+            BorderThickness = new Thickness(0, 0, 0, 0.5)
+        };
+        cell.Blocks.Add(new Paragraph(new Run(item.Name))
+        {
+            FontSize = 12,
+            FontWeight = FontWeights.SemiBold,
+            Foreground = itemBrush,
+            Margin = new Thickness(0)
+        });
+        if (!string.IsNullOrWhiteSpace(item.Observation))
+        {
+            cell.Blocks.Add(new Paragraph(new Run($"Obs.: {item.Observation}"))
+            {
+                FontSize = 10,
+                FontWeight = FontWeights.Normal,
+                Foreground = observationBrush,
+                Margin = new Thickness(0, 2, 0, 0)
             });
         }
         return cell;

@@ -1,19 +1,151 @@
 {
   "rules": {
+    "waiterDirectory": {
+      "$waiterUid": {
+        ".read": "auth != null && (auth.uid === $waiterUid || auth.uid === data.child('storeUid').val())",
+        ".write": "auth != null && ((!data.exists() && auth.uid === newData.child('storeUid').val() && newData.child('waiterUid').val() === $waiterUid) || (data.exists() && auth.uid === data.child('storeUid').val() && newData.child('storeUid').val() === data.child('storeUid').val() && newData.child('storeSlug').val() === data.child('storeSlug').val() && newData.child('waiterNumber').val() === data.child('waiterNumber').val() && newData.child('waiterUid').val() === $waiterUid && newData.child('employeeId').val() === data.child('employeeId').val() && newData.child('createdAt').val() === data.child('createdAt').val()))",
+        ".validate": "newData.hasChildren(['waiterUid', 'storeUid', 'storeSlug', 'storeName', 'waiterNumber', 'employeeId', 'active', 'createdAt'])",
+        "waiterUid": {
+          ".validate": "newData.isString() && newData.val() === $waiterUid"
+        },
+        "storeUid": {
+          ".validate": "newData.isString() && newData.val().length > 0"
+        },
+        "storeSlug": {
+          ".validate": "newData.isString() && newData.val().matches(/^[a-z0-9][a-z0-9-]{1,38}[a-z0-9]$/)"
+        },
+        "storeName": {
+          ".validate": "newData.isString() && newData.val().length > 0 && newData.val().length <= 120"
+        },
+        "waiterNumber": {
+          ".validate": "newData.isString() && newData.val().matches(/^[A-Z0-9-]{1,20}$/)"
+        },
+        "employeeId": {
+          ".validate": "newData.isString() && newData.val().length > 0 && newData.val().length <= 80"
+        },
+        "active": {
+          ".validate": "newData.isBoolean()"
+        },
+        "createdAt": {
+          ".validate": "newData.isString() && newData.val().length <= 40"
+        },
+        "$other": {
+          ".validate": "$other === 'waiterUid' || $other === 'storeUid' || $other === 'storeSlug' || $other === 'storeName' || $other === 'waiterNumber' || $other === 'employeeId' || $other === 'active' || $other === 'createdAt'"
+        }
+      }
+    },
     "clients": {
       "$uid": {
         ".read": "auth != null && auth.uid === $uid",
         "storeType": {
+          ".read": "auth != null && (auth.uid === $uid || (root.child('waiterDirectory').child(auth.uid).child('storeUid').val() === $uid && root.child('waiterDirectory').child(auth.uid).child('active').val() === true && root.child('clients').child($uid).child('restaurantAccess').child(auth.uid).child('active').val() === true))",
           ".write": "auth != null && auth.uid === $uid",
           ".validate": "newData.val() === 'sales' || newData.val() === 'restaurant'"
+        },
+        "restaurantAccess": {
+          "$waiterUid": {
+            ".read": "auth != null && (auth.uid === $uid || (auth.uid === $waiterUid && root.child('waiterDirectory').child(auth.uid).child('storeUid').val() === $uid))",
+            ".write": "auth != null && auth.uid === $uid && root.child('clients').child($uid).child('storeType').val() === 'restaurant'",
+            ".validate": "newData.hasChildren(['active', 'displayName', 'waiterNumber', 'role', 'areas'])",
+            "active": {
+              ".validate": "newData.isBoolean()"
+            },
+            "displayName": {
+              ".validate": "newData.isString() && newData.val().length > 0 && newData.val().length <= 80"
+            },
+            "waiterNumber": {
+              ".validate": "newData.isString() && newData.val().matches(/^[A-Z0-9-]{1,20}$/)"
+            },
+            "role": {
+              ".validate": "newData.val() === 'waiter'"
+            },
+            "employeeId": {
+              ".validate": "newData.isString() && newData.val().length > 0 && newData.val().length <= 80"
+            },
+            "areas": {
+              ".validate": "newData.hasChildren()",
+              "$areaId": {
+                ".validate": "newData.val() === true"
+              }
+            },
+            "$other": {
+              ".validate": "$other === 'active' || $other === 'displayName' || $other === 'waiterNumber' || $other === 'role' || $other === 'employeeId' || $other === 'areas'"
+            }
+          }
         },
         "branches": {
           "$branch": {
             ".read": "auth != null && auth.uid === $uid && root.child('clients').child($uid).child('storeType').val() === $branch",
+            "restaurantLive": {
+              ".write": "auth != null && auth.uid === $uid && $branch === 'restaurant' && root.child('clients').child($uid).child('storeType').val() === 'restaurant'",
+              "menu": {
+                ".read": "auth != null && root.child('clients').child($uid).child('storeType').val() === 'restaurant' && (auth.uid === $uid || (root.child('waiterDirectory').child(auth.uid).child('storeUid').val() === $uid && root.child('waiterDirectory').child(auth.uid).child('active').val() === true && root.child('clients').child($uid).child('restaurantAccess').child(auth.uid).child('active').val() === true))"
+              },
+              "areas": {
+                "$areaId": {
+                  ".read": "auth != null && root.child('clients').child($uid).child('storeType').val() === 'restaurant' && data.child('isActive').val() === true && (auth.uid === $uid || (root.child('waiterDirectory').child(auth.uid).child('storeUid').val() === $uid && root.child('waiterDirectory').child(auth.uid).child('active').val() === true && root.child('clients').child($uid).child('restaurantAccess').child(auth.uid).child('active').val() === true && root.child('clients').child($uid).child('restaurantAccess').child(auth.uid).child('areas').child($areaId).val() === true))"
+                }
+              }
+            },
             "events": {
               "$eventId": {
                 ".write": "auth != null && auth.uid === $uid && root.child('clients').child($uid).child('storeType').val() === $branch && ($branch === 'sales' || $branch === 'restaurant')",
                 ".validate": "newData.hasChildren(['id', 'entity', 'entityId', 'createdAt', 'payload']) && newData.child('id').val() === $eventId"
+              }
+            },
+            "waiterCommands": {
+              ".indexOn": ["status"],
+              "$commandId": {
+                ".read": "auth != null && (auth.uid === $uid || (auth.uid === data.child('employeeUid').val() && root.child('waiterDirectory').child(auth.uid).child('storeUid').val() === $uid && root.child('waiterDirectory').child(auth.uid).child('active').val() === true && root.child('clients').child($uid).child('restaurantAccess').child(auth.uid).child('active').val() === true && root.child('clients').child($uid).child('restaurantAccess').child(auth.uid).child('areas').child(data.child('areaId').val()).val() === true))",
+                ".write": "auth != null && ((auth.uid === $uid && root.child('clients').child($uid).child('storeType').val() === 'restaurant' && $branch === 'restaurant') || (!data.exists() && newData.child('status').val() === 'pending' && !newData.child('result').exists() && auth.uid === newData.child('employeeUid').val() && root.child('waiterDirectory').child(auth.uid).child('storeUid').val() === $uid && root.child('waiterDirectory').child(auth.uid).child('active').val() === true && root.child('clients').child($uid).child('storeType').val() === 'restaurant' && root.child('clients').child($uid).child('restaurantAccess').child(auth.uid).child('active').val() === true && root.child('clients').child($uid).child('restaurantAccess').child(auth.uid).child('role').val() === 'waiter' && root.child('clients').child($uid).child('restaurantAccess').child(auth.uid).child('areas').child(newData.child('areaId').val()).val() === true && root.child('clients').child($uid).child('branches').child('restaurant').child('restaurantLive').child('areas').child(newData.child('areaId').val()).child('tables').child(newData.child('tableId').val()).child('isActive').val() === true && root.child('clients').child($uid).child('branches').child('restaurant').child('restaurantLive').child('menu').child('items').child(newData.child('menuItemId').val()).child('isActive').val() === true))",
+                ".validate": "newData.hasChildren(['id', 'type', 'areaId', 'tableId', 'employeeUid', 'menuItemId', 'quantity', 'status', 'createdAt']) && newData.child('id').val() === $commandId && newData.child('type').val() === 'addItem'",
+                "id": {
+                  ".validate": "newData.isString() && newData.val() === $commandId"
+                },
+                "type": {
+                  ".validate": "newData.val() === 'addItem'"
+                },
+                "areaId": {
+                  ".validate": "newData.isString() && newData.val().length > 0"
+                },
+                "tableId": {
+                  ".validate": "newData.isString() && newData.val().length > 0"
+                },
+                "employeeUid": {
+                  ".validate": "newData.isString() && newData.val().length > 0"
+                },
+                "menuItemId": {
+                  ".validate": "newData.isString() && newData.val().length > 0"
+                },
+                "quantity": {
+                  ".validate": "newData.isNumber() && newData.val() > 0 && newData.val() <= 99"
+                },
+                "status": {
+                  ".validate": "newData.val() === 'pending' || newData.val() === 'applied' || newData.val() === 'rejected'"
+                },
+                "createdAt": {
+                  ".validate": "newData.isString() && newData.val().length > 0"
+                },
+                "observation": {
+                  ".validate": "newData.isString() && newData.val().length <= 250"
+                },
+                "result": {
+                  "message": {
+                    ".validate": "newData.isString()"
+                  },
+                  "orderId": {
+                    ".validate": "newData.isString()"
+                  },
+                  "processedAt": {
+                    ".validate": "newData.isString()"
+                  },
+                  "$other": {
+                    ".validate": "$other === 'message' || $other === 'orderId' || $other === 'processedAt'"
+                  }
+                },
+                "$other": {
+                  ".validate": "$other === 'id' || $other === 'type' || $other === 'areaId' || $other === 'tableId' || $other === 'employeeUid' || $other === 'menuItemId' || $other === 'quantity' || $other === 'status' || $other === 'createdAt' || $other === 'observation' || $other === 'result'"
+                }
               }
             }
           }

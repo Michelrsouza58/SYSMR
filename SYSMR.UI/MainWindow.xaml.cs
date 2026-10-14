@@ -186,10 +186,39 @@ public partial class MainWindow : Window
     {
         var row = _cart.FirstOrDefault(item => item.ProductId == scanned.Product.Id);
         if (row is null)
-            _cart.Add(new CartRow(scanned.Product.Id, scanned.Product.Name, scanned.Quantity, scanned.Product.SalePrice));
+        {
+            row = new CartRow(scanned.Product.Id, scanned.Product.Name, scanned.Quantity, scanned.Product.SalePrice);
+            row.PropertyChanged += CartRow_PropertyChanged;
+            _cart.Add(row);
+        }
         else
             row.Quantity += scanned.Quantity;
         RefreshCart();
+    }
+
+    private void CartRow_PropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName is nameof(CartRow.Quantity) or nameof(CartRow.Total))
+            RefreshCart(refreshItems: false);
+    }
+
+    private async void RemoveCartItem_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not Button { Tag: CartRow row } || !_cart.Contains(row))
+            return;
+
+        if (MessageBox.Show(
+                $"Remover '{row.Name}' do carrinho?",
+                "Confirmar remoção",
+                MessageBoxButton.YesNo,
+                MessageBoxImage.Warning) != MessageBoxResult.Yes)
+            return;
+
+        _cart.Remove(row);
+        RefreshCart();
+        await TryLogActionAsync("Item removido da venda", $"Produto {row.Name}; quantidade {row.Quantity}.");
+        StatusText.Text = "Item removido do carrinho.";
+        BarcodeBox.Focus();
     }
 
     private async void SearchBox_TextChanged(object sender, TextChangedEventArgs e)
@@ -327,11 +356,12 @@ public partial class MainWindow : Window
 
     private decimal Total => _cart.Sum(row => row.Total);
 
-    private void RefreshCart()
+    private void RefreshCart(bool refreshItems = true)
     {
         TotalText.Text = Total.ToString("C2");
         CartCountText.Text = $"{_cart.Sum(row => row.Quantity):N3} item(ns)";
-        CartGrid.Items.Refresh();
+        if (refreshItems)
+            CartGrid.Items.Refresh();
     }
 
     private async void Navigation_Click(object sender, RoutedEventArgs e)
@@ -1056,6 +1086,14 @@ public partial class MainWindow : Window
         decimal total,
         string? accountDetails = null)
     {
+        var formatDialog = new ReceiptFormatWindow(_receiptFormat == "a4signature") { Owner = this };
+        if (formatDialog.ShowDialog() != true)
+        {
+            StatusText.Text = "Impressão cancelada; a operação permanece registrada.";
+            return;
+        }
+
+        var isA4 = formatDialog.IsA4;
         var printDialog = new PrintDialog();
         if (!string.IsNullOrWhiteSpace(_selectedPrinter))
         {
@@ -1075,8 +1113,7 @@ public partial class MainWindow : Window
             var document = CreateReceiptDocument(
                 title, transactionId, customer, seller, payment, createdAt, items, total,
                 _receiptStoreName, _receiptPhone, _receiptAddress, _receiptFooter,
-                _receiptFormat == "a4signature", accountDetails);
-            var isA4 = _receiptFormat == "a4signature";
+                isA4, accountDetails);
             var pageWidth = isA4 ? 8.27 * 96 : 80 * 96 / 25.4;
             var pageHeight = isA4 ? 11.7 * 96 : Math.Max(420, (document.Blocks.Count * 42 + items.Count * 22) * 96 / 72);
             document.PageWidth = pageWidth;
@@ -1471,12 +1508,10 @@ public partial class MainWindow : Window
             e.Handled = true;
             if (CartGrid.SelectedItem is CartRow selected)
             {
-                if (!await EnsureAdministratorAccessAsync())
-                    return;
                 _cart.Remove(selected);
                 RefreshCart();
                 await TryLogActionAsync("Item removido da venda", $"Produto {selected.Name}; quantidade {selected.Quantity}.");
-                StatusText.Text = "Item removido após autorização do Super Admin.";
+                StatusText.Text = "Item removido do carrinho.";
             }
             else if (_cart.Count > 0 &&
                      MessageBox.Show("Cancelar a venda atual?", "Cancelar venda", MessageBoxButton.YesNo, MessageBoxImage.Warning) == MessageBoxResult.Yes)
@@ -1523,11 +1558,26 @@ public partial class MainWindow : Window
     }
 
     public sealed class CartRow(Guid productId, string name, decimal quantity, decimal unitPrice)
+        : System.ComponentModel.INotifyPropertyChanged
     {
+        private decimal _quantity = quantity;
+
         public Guid ProductId { get; } = productId;
         public string Name { get; } = name;
-        public decimal Quantity { get; set; } = quantity;
+        public decimal Quantity
+        {
+            get => _quantity;
+            set
+            {
+                if (value <= 0 || value == _quantity)
+                    return;
+                _quantity = value;
+                PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(nameof(Quantity)));
+                PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(nameof(Total)));
+            }
+        }
         public decimal UnitPrice { get; } = unitPrice;
         public decimal Total => decimal.Round(Quantity * UnitPrice, 2, MidpointRounding.AwayFromZero);
+        public event System.ComponentModel.PropertyChangedEventHandler? PropertyChanged;
     }
 }

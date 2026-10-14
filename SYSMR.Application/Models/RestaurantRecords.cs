@@ -2,8 +2,17 @@ using SYSMR.Domain.Entities;
 
 namespace SYSMR.Application.Models;
 
-public sealed record RestaurantAreaRecord(Guid Id, string Name, int SortOrder, int TableCount);
-public sealed record RestaurantTableRecord(Guid Id, Guid AreaId, int Number, bool IsOccupied, decimal Total)
+public sealed record RestaurantAreaRecord(Guid Id, string Name, int SortOrder, int TableCount, bool IsActive = true)
+{
+    public string StatusLabel => IsActive ? "Ativa" : "Inativa";
+}
+public sealed record RestaurantTableRecord(
+    Guid Id,
+    Guid AreaId,
+    int Number,
+    bool IsOccupied,
+    decimal Total,
+    bool IsActive = true)
 {
     public string StatusLabel => IsOccupied ? "OCUPADA" : "LIVRE";
 }
@@ -18,11 +27,24 @@ public sealed record RestaurantMenuItemRecord(
 {
     public string StatusLabel => IsActive ? "Ativo" : "Inativo";
 }
-public sealed record RestaurantEmployeeRecord(Guid Id, string Name, string Role, bool IsActive)
+public sealed record RestaurantEmployeeRecord(
+    Guid Id,
+    string Name,
+    string Role,
+    bool IsActive,
+    string? WaiterNumber = null,
+    string? FirebaseUid = null,
+    string? AreaIds = null)
 {
     public string StatusLabel => IsActive ? "Ativo" : "Inativo";
+    public bool HasWebAccess => !string.IsNullOrWhiteSpace(FirebaseUid);
 }
-public sealed record RestaurantOrderItemRecord(Guid Id, string Name, decimal Quantity, decimal UnitPrice)
+public sealed record RestaurantOrderItemRecord(
+    Guid Id,
+    string Name,
+    decimal Quantity,
+    decimal UnitPrice,
+    string? Observation = null)
 {
     public decimal Total => Quantity * UnitPrice;
 }
@@ -43,6 +65,18 @@ public sealed record RestaurantOrderRecord(
     public decimal Total => Subtotal + WaiterServiceCharge;
     public decimal RemainingTotal => Math.Max(0, Total - PaidTotal);
 }
+public sealed record WaiterCommandRecord(
+    string? Id,
+    string? Type,
+    string? AreaId,
+    string? TableId,
+    string? EmployeeUid,
+    string? MenuItemId,
+    decimal Quantity,
+    string? Status,
+    string? CreatedAt,
+    string? Observation = null);
+public sealed record WaiterCommandResult(string Status, string? Message, Guid? OrderId);
 public sealed record RestaurantCashSessionRecord(
     Guid Id,
     DateTimeOffset OpenedAt,

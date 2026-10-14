@@ -142,7 +142,7 @@
                 <Grid x:Name="EmployeesPage" Visibility="Collapsed">
                     <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
                     <DockPanel Margin="0,0,0,12">
-                        <StackPanel><TextBlock Text="Funcionários" FontSize="22" FontWeight="Bold"/><TextBlock Text="Cadastro operacional local; login individual e permissões por cargo ainda não fazem parte desta versão." Foreground="#748198" Margin="0,4,0,0"/></StackPanel>
+                        <StackPanel><TextBlock Text="Funcionários e garçons" FontSize="22" FontWeight="Bold"/><TextBlock Text="Cadastre o acesso do webapp com número, senha inicial e áreas permitidas." Foreground="#748198" Margin="0,4,0,0"/></StackPanel>
                         <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
                             <Button Content="＋ Novo funcionário" Background="#17233B" Foreground="White" Margin="0,0,8,0" Padding="12,7" Click="NewEmployee_Click"/>
                             <Button Content="Editar" Margin="0,0,8,0" Padding="12,7" Click="EditEmployee_Click"/>
@@ -152,7 +152,9 @@
                     <DataGrid x:Name="EmployeesGrid" Grid.Row="1" IsReadOnly="True" AutoGenerateColumns="False" SelectionChanged="EmployeesGrid_SelectionChanged">
                         <DataGrid.Columns>
                             <DataGridTextColumn Header="NOME" Binding="{Binding Name}" Width="*"/>
+                            <DataGridTextColumn Header="Nº GARÇOM" Binding="{Binding WaiterNumber}" Width="130"/>
                             <DataGridTextColumn Header="FUNÇÃO" Binding="{Binding Role}" Width="220"/>
+                            <DataGridCheckBoxColumn Header="ACESSO WEB" Binding="{Binding HasWebAccess, Mode=OneWay}" IsReadOnly="True" Width="110"/>
                             <DataGridTextColumn Header="STATUS" Binding="{Binding StatusLabel}" Width="120"/>
                         </DataGrid.Columns>
                     </DataGrid>
@@ -183,15 +185,17 @@
                             <StackPanel>
                                 <TextBlock Text="Áreas e quantidade de mesas" FontSize="17" FontWeight="Bold"/>
                                 <TextBlock Text="Crie áreas (por exemplo, Salão, Varanda ou Área 1) e configure quantas mesas aparecem em cada uma. Reduzir a quantidade só remove mesas livres." TextWrapping="Wrap" Foreground="#748198" Margin="0,6,0,12"/>
-                                <DataGrid x:Name="SettingsAreasGrid" Height="240" IsReadOnly="True" AutoGenerateColumns="False">
+                                <DataGrid x:Name="SettingsAreasGrid" Height="240" IsReadOnly="True" AutoGenerateColumns="False" SelectionChanged="SettingsAreasGrid_SelectionChanged">
                                     <DataGrid.Columns>
                                         <DataGridTextColumn Header="ÁREA" Binding="{Binding Name}" Width="*"/>
                                         <DataGridTextColumn Header="MESAS" Binding="{Binding TableCount}" Width="130"/>
+                                        <DataGridTextColumn Header="STATUS" Binding="{Binding StatusLabel}" Width="120"/>
                                     </DataGrid.Columns>
                                 </DataGrid>
                                 <StackPanel Orientation="Horizontal" Margin="0,12,0,0">
-                                    <Button Content="＋ Nova área" Padding="12,8" Background="#17233B" Foreground="White" Click="NewArea_Click"/>
-                                    <Button Content="Definir quantidade de mesas" Padding="12,8" Margin="8,0,0,0" Click="SetTableCount_Click"/>
+                                <Button Content="＋ Nova área" Padding="12,8" Background="#17233B" Foreground="White" Click="NewArea_Click"/>
+                                <Button Content="Definir quantidade de mesas" Padding="12,8" Margin="8,0,0,0" Click="SetTableCount_Click"/>
+                                <Button x:Name="ToggleAreaButton" Content="Desativar área" Padding="12,8" Margin="8,0,0,0" Click="ToggleArea_Click"/>
                                 </StackPanel>
                             </StackPanel>
                         </Border>

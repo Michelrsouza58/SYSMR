@@ -27,13 +27,39 @@
                 <Button Content="Imprimir cozinha" Padding="10,8" Margin="0,0,8,0" Click="PrintKitchen_Click"/>
                 <ComboBox x:Name="MenuItemCombo" Width="280" Padding="8" DisplayMemberPath="Name"/>
                 <TextBox x:Name="QuantityBox" Text="1" Width="65" Padding="8" Margin="8,0"/>
+                <TextBox x:Name="ObservationBox" Width="150" Padding="8" Margin="0,0,8,0"
+                         ToolTip="Observação do item (opcional, até 250 caracteres)"/>
                 <Button Content="＋ Adicionar" Background="#17233B" Foreground="White" Click="AddItem_Click"/>
             </StackPanel>
         </DockPanel>
         <Border Grid.Row="2" Background="White" CornerRadius="12" BorderBrush="#E8EDF3" BorderThickness="1" Padding="0">
             <DataGrid x:Name="ItemsGrid" IsReadOnly="True" AutoGenerateColumns="False" CanUserAddRows="False">
                 <DataGrid.Columns>
-                    <DataGridTextColumn Header="ITEM" Binding="{Binding Name}" Width="*"/>
+                    <DataGridTemplateColumn Header="ITEM" Width="*">
+                        <DataGridTemplateColumn.CellTemplate>
+                            <DataTemplate>
+                                <StackPanel Margin="3,5">
+                                    <TextBlock Text="{Binding Name}" FontWeight="SemiBold" TextWrapping="Wrap"/>
+                                    <TextBlock Text="{Binding Observation}" Foreground="#748198"
+                                               FontSize="11" TextWrapping="Wrap" Margin="0,2,0,0">
+                                        <TextBlock.Style>
+                                            <Style TargetType="TextBlock">
+                                                <Setter Property="Visibility" Value="Visible"/>
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding Observation}" Value="{x:Null}">
+                                                        <Setter Property="Visibility" Value="Collapsed"/>
+                                                    </DataTrigger>
+                                                    <DataTrigger Binding="{Binding Observation}" Value="">
+                                                        <Setter Property="Visibility" Value="Collapsed"/>
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </TextBlock.Style>
+                                    </TextBlock>
+                                </StackPanel>
+                            </DataTemplate>
+                        </DataGridTemplateColumn.CellTemplate>
+                    </DataGridTemplateColumn>
                     <DataGridTextColumn Header="QUANTIDADE" Binding="{Binding Quantity, StringFormat=N2}" Width="140"/>
                     <DataGridTextColumn Header="UNITÁRIO" Binding="{Binding UnitPrice, StringFormat=C2}" Width="140"/>
                     <DataGridTextColumn Header="TOTAL" Binding="{Binding Total, StringFormat=C2}" Width="140"/>

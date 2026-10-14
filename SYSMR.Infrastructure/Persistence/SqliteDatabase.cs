@@ -146,7 +146,8 @@ public sealed class SqliteDatabase(string databasePath)
             CREATE TABLE IF NOT EXISTS RestaurantAreas (
                 Id TEXT PRIMARY KEY,
                 Name TEXT NOT NULL COLLATE NOCASE UNIQUE,
-                SortOrder INTEGER NOT NULL DEFAULT 0
+                SortOrder INTEGER NOT NULL DEFAULT 0,
+                IsActive INTEGER NOT NULL DEFAULT 1
             );
             CREATE TABLE IF NOT EXISTS RestaurantTables (
                 Id TEXT PRIMARY KEY,
@@ -168,7 +169,10 @@ public sealed class SqliteDatabase(string databasePath)
                 Id TEXT PRIMARY KEY,
                 Name TEXT NOT NULL COLLATE NOCASE UNIQUE,
                 Role TEXT NOT NULL DEFAULT 'Atendente',
-                IsActive INTEGER NOT NULL DEFAULT 1
+                IsActive INTEGER NOT NULL DEFAULT 1,
+                WaiterNumber TEXT,
+                FirebaseUid TEXT,
+                AreaIds TEXT NOT NULL DEFAULT ''
             );
             CREATE TABLE IF NOT EXISTS RestaurantOrders (
                 Id TEXT PRIMARY KEY,
@@ -189,6 +193,13 @@ public sealed class SqliteDatabase(string databasePath)
                 UnitPrice TEXT NOT NULL,
                 InventoryProductId TEXT REFERENCES Products(Id),
                 InventoryQuantityPerUnit TEXT NOT NULL DEFAULT '0'
+            );
+            CREATE TABLE IF NOT EXISTS RestaurantWaiterCommands (
+                CommandId TEXT PRIMARY KEY,
+                Status TEXT NOT NULL,
+                Message TEXT,
+                OrderId TEXT,
+                ProcessedAt TEXT NOT NULL
             );
             CREATE TABLE IF NOT EXISTS RestaurantPayments (
                 Id TEXT PRIMARY KEY,
@@ -226,12 +237,25 @@ public sealed class SqliteDatabase(string databasePath)
         await EnsureColumnAsync(connection, "StoreAccountCache", "AutoLogin", "INTEGER NOT NULL DEFAULT 1");
         await EnsureColumnAsync(connection, "StoreAccountCache", "StoreType", "TEXT NOT NULL DEFAULT 'sales'");
         await EnsureColumnAsync(connection, "StoreAccountCache", "ProtectedRefreshToken", "TEXT");
+        await EnsureColumnAsync(connection, "RestaurantAreas", "IsActive", "INTEGER NOT NULL DEFAULT 1");
         await EnsureColumnAsync(connection, "RestaurantTables", "IsActive", "INTEGER NOT NULL DEFAULT 1");
         await EnsureColumnAsync(connection, "RestaurantOrders", "WaiterServiceChargeEnabled", "INTEGER NOT NULL DEFAULT 0");
         await EnsureColumnAsync(connection, "RestaurantMenuItems", "InventoryProductId", "TEXT REFERENCES Products(Id)");
         await EnsureColumnAsync(connection, "RestaurantMenuItems", "InventoryQuantityPerUnit", "TEXT NOT NULL DEFAULT '0'");
+        await EnsureColumnAsync(connection, "RestaurantEmployees", "WaiterNumber", "TEXT");
+        await EnsureColumnAsync(connection, "RestaurantEmployees", "FirebaseUid", "TEXT");
+        await EnsureColumnAsync(connection, "RestaurantEmployees", "AreaIds", "TEXT NOT NULL DEFAULT ''");
+        await using (var waiterNumberIndex = connection.CreateCommand())
+        {
+            waiterNumberIndex.CommandText = """
+                CREATE UNIQUE INDEX IF NOT EXISTS IX_RestaurantEmployees_WaiterNumber
+                    ON RestaurantEmployees(WaiterNumber) WHERE WaiterNumber IS NOT NULL;
+                """;
+            await waiterNumberIndex.ExecuteNonQueryAsync(cancellationToken);
+        }
         await EnsureColumnAsync(connection, "RestaurantOrderItems", "InventoryProductId", "TEXT REFERENCES Products(Id)");
         await EnsureColumnAsync(connection, "RestaurantOrderItems", "InventoryQuantityPerUnit", "TEXT NOT NULL DEFAULT '0'");
+        await EnsureColumnAsync(connection, "RestaurantOrderItems", "Observation", "TEXT NOT NULL DEFAULT ''");
         await MigrateRestaurantPaymentsAsync(connection, cancellationToken);
         await SeedProductsAsync(connection, cancellationToken);
     }

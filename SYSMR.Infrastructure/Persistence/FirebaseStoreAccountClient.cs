@@ -5,6 +5,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using SYSMR.Application.Models;
 
 namespace SYSMR.Infrastructure.Persistence;
 
@@ -132,6 +133,343 @@ public sealed class FirebaseStoreAccountClient(SqliteAccessControl settings)
         return session.RefreshToken;
     }
 
+    public async Task<string> UploadRestaurantMenuAsync(
+        string firebaseUid,
+        IReadOnlyList<RestaurantMenuItemRecord> menuItems,
+        string refreshToken,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(firebaseUid);
+        ArgumentNullException.ThrowIfNull(menuItems);
+
+        var categories = menuItems
+            .Select(item => NormalizeMenuCategory(item.Category))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(
+                CreateMenuCategoryId,
+                category => new { id = CreateMenuCategoryId(category), name = category },
+                StringComparer.Ordinal);
+        var items = menuItems.ToDictionary(
+            item => item.Id.ToString(),
+            item => new
+            {
+                id = item.Id,
+                name = item.Name,
+                categoryId = CreateMenuCategoryId(NormalizeMenuCategory(item.Category)),
+                price = item.Price,
+                isActive = item.IsActive
+            });
+        var menu = new
+        {
+            schemaVersion = 1,
+            updatedAt = DateTimeOffset.UtcNow,
+            categories,
+            items
+        };
+
+        var session = await RefreshSessionAsync(firebaseUid, refreshToken, cancellationToken);
+        var endpoint = $"{session.DatabaseUrl}/clients/{Uri.EscapeDataString(firebaseUid)}/branches/restaurant/restaurantLive/menu.json?auth={Uri.EscapeDataString(session.IdToken)}";
+        using var content = JsonContent.Create(menu, options: JsonOptions);
+        using var response = await Http.PutAsync(endpoint, content, cancellationToken);
+        var body = await response.Content.ReadAsStringAsync(cancellationToken);
+        if (!response.IsSuccessStatusCode)
+            throw new HttpRequestException(
+                $"Não foi possível publicar o cardápio no Realtime Database ({(int)response.StatusCode}): {body}",
+                null,
+                response.StatusCode);
+        return session.RefreshToken;
+    }
+
+    public async Task<string> UploadRestaurantAreasAsync(
+        string firebaseUid,
+        IReadOnlyList<RestaurantAreaRecord> areas,
+        IReadOnlyDictionary<Guid, IReadOnlyList<RestaurantTableRecord>> tablesByArea,
+        IReadOnlyDictionary<Guid, RestaurantOrderRecord?> openOrdersByTable,
+        string refreshToken,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(firebaseUid);
+        ArgumentNullException.ThrowIfNull(areas);
+        ArgumentNullException.ThrowIfNull(tablesByArea);
+        ArgumentNullException.ThrowIfNull(openOrdersByTable);
+
+        var areaNodes = new Dictionary<string, object>();
+        foreach (var area in areas)
+        {
+            var tableNodes = tablesByArea.TryGetValue(area.Id, out var tables)
+                ? tables.ToDictionary(
+                    table => table.Id.ToString(),
+                    table =>
+                    {
+                        var order = openOrdersByTable.GetValueOrDefault(table.Id);
+                        return (object)new
+                        {
+                            number = table.Number,
+                            isActive = table.IsActive,
+                            openOrder = order is null
+                                ? null
+                                : new
+                                {
+                                    id = order.Id,
+                                    openedAt = order.OpenedAt,
+                                    employeeName = order.EmployeeName,
+                                    items = order.Items.Select(item => new
+                                    {
+                                        id = item.Id,
+                                        name = item.Name,
+                                        quantity = item.Quantity,
+                                        unitPrice = item.UnitPrice,
+                                        observation = item.Observation
+                                    }),
+                                    subtotal = order.Subtotal,
+                                    waiterServiceChargeEnabled = order.WaiterServiceChargeEnabled,
+                                    waiterServiceCharge = order.WaiterServiceCharge,
+                                    total = order.Total,
+                                    paidTotal = order.PaidTotal,
+                                    remainingTotal = order.RemainingTotal
+                                }
+                        };
+                    })
+                : new Dictionary<string, object>();
+            areaNodes.Add(
+                area.Id.ToString(),
+                new
+                {
+                    id = area.Id,
+                    name = area.Name,
+                    sortOrder = area.SortOrder,
+                    isActive = area.IsActive,
+                    tables = tableNodes
+                });
+        }
+        var session = await RefreshSessionAsync(firebaseUid, refreshToken, cancellationToken);
+        var endpoint = $"{session.DatabaseUrl}/clients/{Uri.EscapeDataString(firebaseUid)}/branches/restaurant/restaurantLive/areas.json?auth={Uri.EscapeDataString(session.IdToken)}";
+        using var content = JsonContent.Create(areaNodes, options: JsonOptions);
+        using var response = await Http.PutAsync(endpoint, content, cancellationToken);
+        var body = await response.Content.ReadAsStringAsync(cancellationToken);
+        if (!response.IsSuccessStatusCode)
+            throw new HttpRequestException(
+                $"Não foi possível publicar áreas e mesas no Realtime Database ({(int)response.StatusCode}): {body}",
+                null,
+                response.StatusCode);
+        return session.RefreshToken;
+    }
+
+    public async Task<(string RefreshToken, IReadOnlyList<WaiterCommandRecord> Commands)> GetPendingWaiterCommandsAsync(
+        string firebaseUid,
+        string refreshToken,
+        CancellationToken cancellationToken = default)
+    {
+        var session = await RefreshSessionAsync(firebaseUid, refreshToken, cancellationToken);
+        var endpoint = $"{session.DatabaseUrl}/clients/{Uri.EscapeDataString(firebaseUid)}/branches/restaurant/waiterCommands.json?auth={Uri.EscapeDataString(session.IdToken)}&orderBy=%22status%22&equalTo=%22pending%22";
+        using var response = await Http.GetAsync(endpoint, cancellationToken);
+        var body = await response.Content.ReadAsStringAsync(cancellationToken);
+        if (!response.IsSuccessStatusCode)
+            throw new HttpRequestException(
+                $"Não foi possível consultar pedidos dos garçons no Realtime Database ({(int)response.StatusCode}): {body}",
+                null,
+                response.StatusCode);
+
+        using var document = JsonDocument.Parse(body);
+        var commands = new List<WaiterCommandRecord>();
+        if (document.RootElement.ValueKind == JsonValueKind.Object)
+        {
+            foreach (var property in document.RootElement.EnumerateObject())
+            {
+                var command = property.Value.Deserialize<WaiterCommandRecord>(JsonOptions);
+                if (command is not null && command.Status?.Equals("pending", StringComparison.OrdinalIgnoreCase) == true)
+                    commands.Add(command with { Id = command.Id ?? property.Name });
+            }
+        }
+        else if (document.RootElement.ValueKind is not JsonValueKind.Null)
+        {
+            throw new InvalidDataException("A lista de pedidos dos garçons no Firebase tem formato inválido.");
+        }
+
+        return (session.RefreshToken, commands);
+    }
+
+    public async Task<string> CompleteWaiterCommandAsync(
+        string firebaseUid,
+        string commandId,
+        WaiterCommandResult result,
+        string refreshToken,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(commandId);
+        ArgumentNullException.ThrowIfNull(result);
+        var session = await RefreshSessionAsync(firebaseUid, refreshToken, cancellationToken);
+        var endpoint = $"{session.DatabaseUrl}/clients/{Uri.EscapeDataString(firebaseUid)}/branches/restaurant/waiterCommands/{Uri.EscapeDataString(commandId)}.json?auth={Uri.EscapeDataString(session.IdToken)}";
+        using var content = JsonContent.Create(new
+        {
+            status = result.Status,
+            result = new
+            {
+                message = result.Message,
+                orderId = result.OrderId,
+                processedAt = DateTimeOffset.UtcNow
+            }
+        }, options: JsonOptions);
+        using var response = await Http.PatchAsync(endpoint, content, cancellationToken);
+        var body = await response.Content.ReadAsStringAsync(cancellationToken);
+        if (!response.IsSuccessStatusCode)
+            throw new HttpRequestException(
+                $"Não foi possível atualizar o resultado do pedido do garçom ({(int)response.StatusCode}): {body}",
+                null,
+                response.StatusCode);
+        return session.RefreshToken;
+    }
+
+    public async Task<WaiterAccountProvisioningResult> CreateOrUpdateWaiterAccountAsync(
+        StoreAccountIdentity store,
+        string refreshToken,
+        RestaurantEmployeeRecord employee,
+        IReadOnlyCollection<Guid> areaIds,
+        string? initialPassword,
+        CancellationToken cancellationToken = default)
+    {
+        if (!store.StoreType.Equals("restaurant", StringComparison.Ordinal))
+            throw new InvalidOperationException("O cadastro de garçons exige uma loja da vertente Restaurante.");
+        if (string.IsNullOrWhiteSpace(employee.WaiterNumber))
+            throw new ArgumentException("Informe o número do garçom.", nameof(employee));
+        if (areaIds.Count == 0)
+            throw new ArgumentException("Atribua pelo menos uma área ao garçom.", nameof(areaIds));
+
+        var storeSlug = CreateWaiterStoreSlug(store.CustomerNumber);
+        var waiterNumber = NormalizeWaiterNumber(employee.WaiterNumber);
+        var waiterEmail = CreateWaiterLoginEmail(storeSlug, waiterNumber);
+        string waiterUid;
+
+        if (string.IsNullOrWhiteSpace(employee.FirebaseUid))
+        {
+            if (string.IsNullOrWhiteSpace(initialPassword) || initialPassword.Length is < 8 or > 128)
+                throw new ArgumentException("A senha inicial deve ter entre 8 e 128 caracteres.", nameof(initialPassword));
+
+            var config = await GetConfigurationAsync(cancellationToken);
+            AuthToken waiterSession;
+            try
+            {
+                waiterSession = await CreateAuthUserAsync(config.ApiKey, waiterEmail, initialPassword, cancellationToken);
+            }
+            catch (FirebaseAccountRequestException exception) when (exception.ErrorCode == "EMAIL_EXISTS")
+            {
+                waiterSession = await SignInWithEmailAsync(
+                    config.ApiKey, waiterEmail, initialPassword, cancellationToken);
+            }
+            waiterUid = waiterSession.LocalId;
+        }
+        else
+        {
+            waiterUid = employee.FirebaseUid;
+        }
+
+        var storeSession = await RefreshSessionAsync(store.FirebaseUid, refreshToken, cancellationToken);
+        var createdAt = DateTimeOffset.UtcNow.ToString("O");
+        var directoryUrl = $"{storeSession.DatabaseUrl}/waiterDirectory/{Uri.EscapeDataString(waiterUid)}.json?auth={Uri.EscapeDataString(storeSession.IdToken)}";
+        using (var directoryResponse = await Http.GetAsync(directoryUrl, cancellationToken))
+        {
+            var body = await directoryResponse.Content.ReadAsStringAsync(cancellationToken);
+            if (directoryResponse.IsSuccessStatusCode)
+            {
+                using var directoryDocument = JsonDocument.Parse(body);
+                if (directoryDocument.RootElement.ValueKind != JsonValueKind.Null)
+                {
+                    var existingDirectory = JsonSerializer.Deserialize<WaiterDirectoryProfile>(body, JsonOptions);
+                    if (existingDirectory is null ||
+                        !string.Equals(existingDirectory.StoreUid, store.FirebaseUid, StringComparison.Ordinal) ||
+                        !string.Equals(existingDirectory.StoreSlug, storeSlug, StringComparison.Ordinal) ||
+                        !string.Equals(existingDirectory.WaiterNumber, waiterNumber, StringComparison.Ordinal) ||
+                        !string.Equals(existingDirectory.EmployeeId, employee.Id.ToString(), StringComparison.Ordinal))
+                        throw new InvalidOperationException(
+                            "Esse número já está vinculado a outra conta/funcionário. Não foi alterado nenhum cadastro.");
+                    createdAt = string.IsNullOrWhiteSpace(existingDirectory.CreatedAt)
+                        ? createdAt
+                        : existingDirectory.CreatedAt;
+                }
+            }
+            else if (directoryResponse.StatusCode is not (HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden))
+            {
+                throw new HttpRequestException(
+                    $"Não foi possível validar o vínculo Firebase do garçom ({(int)directoryResponse.StatusCode}): {body}",
+                    null,
+                    directoryResponse.StatusCode);
+            }
+        }
+
+        var directory = new
+        {
+            waiterUid,
+            storeUid = store.FirebaseUid,
+            storeSlug,
+            storeName = store.CustomerName,
+            waiterNumber,
+            employeeId = employee.Id.ToString(),
+            active = employee.IsActive,
+            createdAt = createdAt
+        };
+        var areas = areaIds.Distinct().ToDictionary(areaId => areaId.ToString(), _ => true);
+        var access = new
+        {
+            active = employee.IsActive,
+            displayName = employee.Name.Trim(),
+            waiterNumber,
+            role = "waiter",
+            employeeId = employee.Id.ToString(),
+            areas
+        };
+        var updates = new Dictionary<string, object>
+        {
+            [$"waiterDirectory/{waiterUid}"] = directory,
+            [$"clients/{store.FirebaseUid}/restaurantAccess/{waiterUid}"] = access
+        };
+
+        using var content = JsonContent.Create(updates, options: JsonOptions);
+        using var response = await Http.PatchAsync(
+            $"{storeSession.DatabaseUrl}/.json?auth={Uri.EscapeDataString(storeSession.IdToken)}",
+            content,
+            cancellationToken);
+        var responseBody = await response.Content.ReadAsStringAsync(cancellationToken);
+        if (!response.IsSuccessStatusCode)
+            throw new HttpRequestException(
+                $"Não foi possível salvar o acesso Firebase do garçom ({(int)response.StatusCode}): {responseBody}",
+                null,
+                response.StatusCode);
+
+        return new WaiterAccountProvisioningResult(waiterUid, storeSession.RefreshToken);
+    }
+
+    public static string CreateWaiterStoreSlug(string customerNumber)
+    {
+        var normalized = SqliteStoreAccountRepository.NormalizeNumber(customerNumber);
+        if (normalized.Length is < 3 or > 32 ||
+            !char.IsAsciiLetterOrDigit(normalized[0]) ||
+            !char.IsAsciiLetterOrDigit(normalized[^1]) ||
+            normalized.Any(character => !char.IsAsciiLetterOrDigit(character) && character != '-'))
+            throw new ArgumentException(
+                "O número da loja deve ter de 3 a 32 caracteres alfanuméricos ou hífens, começando e terminando com letra ou número.",
+                nameof(customerNumber));
+        return normalized.ToLowerInvariant();
+    }
+
+    public static string CreateWaiterLoginEmail(string storeSlug, string waiterNumber)
+    {
+        if (string.IsNullOrWhiteSpace(storeSlug) ||
+            !System.Text.RegularExpressions.Regex.IsMatch(storeSlug, "^[a-z0-9][a-z0-9-]{1,38}[a-z0-9]$"))
+            throw new ArgumentException("O código de acesso da loja é inválido.", nameof(storeSlug));
+        var normalizedNumber = NormalizeWaiterNumber(waiterNumber);
+        return $"garcom.{storeSlug}.{normalizedNumber}@login.sysmr.invalid";
+    }
+
+    private static string NormalizeMenuCategory(string category) =>
+        string.IsNullOrWhiteSpace(category) ? "Sem categoria" : category.Trim();
+
+    private static string CreateMenuCategoryId(string category)
+    {
+        var normalized = category.Trim().ToUpperInvariant();
+        var hash = SHA256.HashData(Encoding.UTF8.GetBytes(normalized));
+        return new Guid(hash.AsSpan(0, 16)).ToString();
+    }
+
     public async Task<string> ChangeStoreTypeAsync(
         string firebaseUid,
         string refreshToken,
@@ -204,6 +542,25 @@ public sealed class FirebaseStoreAccountClient(SqliteAccessControl settings)
             : throw new InvalidOperationException("O Firebase retornou uma resposta de autenticação inválida.");
     }
 
+    private static async Task<AuthToken> CreateAuthUserAsync(
+        string apiKey,
+        string email,
+        string password,
+        CancellationToken cancellationToken)
+    {
+        using var response = await Http.PostAsJsonAsync(
+            $"https://identitytoolkit.googleapis.com/v1/accounts:signUp?key={Uri.EscapeDataString(apiKey)}",
+            new { email, password, returnSecureToken = true },
+            JsonOptions,
+            cancellationToken);
+        var body = await response.Content.ReadAsStringAsync(cancellationToken);
+        if (!response.IsSuccessStatusCode)
+            throw FirebaseAccountRequestException.FromResponse(response.StatusCode, body);
+        return JsonSerializer.Deserialize<AuthToken>(body, JsonOptions) is { LocalId.Length: > 0, IdToken.Length: > 0 } token
+            ? token
+            : throw new InvalidOperationException("O Firebase retornou uma conta de garçom inválida.");
+    }
+
     private static async Task<StoreProfile> ReadProfileAsync(
         string databaseUrl,
         AuthToken token,
@@ -224,8 +581,7 @@ public sealed class FirebaseStoreAccountClient(SqliteAccessControl settings)
     private static void ValidateAccount(string customerNumber, string customerName, string password)
     {
         var number = SqliteStoreAccountRepository.NormalizeNumber(customerNumber);
-        if (number.Length is < 3 or > 32 || number.Any(character => !char.IsAsciiLetterOrDigit(character) && character != '-'))
-            throw new ArgumentException("O número da loja deve ter de 3 a 32 caracteres: letras, números ou hífen.");
+        _ = CreateWaiterStoreSlug(number);
         if (string.IsNullOrWhiteSpace(customerName) || customerName.Trim().Length > 120)
             throw new ArgumentException("Informe o nome da loja (até 120 caracteres).", nameof(customerName));
         if (password.Length is < 8 or > 128)
@@ -240,8 +596,23 @@ public sealed class FirebaseStoreAccountClient(SqliteAccessControl settings)
             _ => throw new ArgumentException("Selecione uma vertente válida para a loja.", nameof(storeType))
         };
 
+    private static string NormalizeWaiterNumber(string waiterNumber)
+    {
+        var normalized = waiterNumber.Trim().ToUpperInvariant();
+        if (normalized.Length is < 1 or > 20 ||
+            normalized.Any(character => !char.IsAsciiLetterOrDigit(character) && character != '-'))
+            throw new ArgumentException("O número do garçom deve ter de 1 a 20 caracteres: letras, números ou hífen.", nameof(waiterNumber));
+        return normalized;
+    }
+
     private sealed record FirebaseConfiguration(string ApiKey, string DatabaseUrl, string ProvisioningUrl);
     private sealed record AuthToken(string LocalId, string IdToken, string RefreshToken);
+    private sealed record WaiterDirectoryProfile(
+        string StoreUid,
+        string StoreSlug,
+        string WaiterNumber,
+        string EmployeeId,
+        string CreatedAt);
     private sealed record RefreshedToken(
         [property: JsonPropertyName("user_id")] string UserId,
         [property: JsonPropertyName("id_token")] string IdToken,
@@ -251,6 +622,7 @@ public sealed class FirebaseStoreAccountClient(SqliteAccessControl settings)
 }
 
 public sealed record FirebaseSession(string IdToken, string RefreshToken, string DatabaseUrl);
+public sealed record WaiterAccountProvisioningResult(string FirebaseUid, string StoreRefreshToken);
 
 public sealed class FirebaseAccountRequestException(
     string errorCode,

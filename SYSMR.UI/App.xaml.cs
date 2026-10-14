@@ -71,6 +71,7 @@ public partial class App : System.Windows.Application
             var storeName = storeAccount?.CustomerName ?? "SYSMR";
             var actor = isSuperAdminLogin ? "Super Admin" : storeName;
             var firebase = new FirebaseStoreAccountClient(accessControl);
+            var restaurantRepository = new SqliteRestaurantRepository(database);
             var storeTypeSwitcher = new StoreTypeSwitchService(localAccounts, syncOutbox, firebase);
             if (storeAccount is not null)
             {
@@ -79,6 +80,7 @@ public partial class App : System.Windows.Application
                     syncOutbox,
                     localAccounts,
                     firebase,
+                    restaurantRepository,
                     auditRepository).RunAsync(storeAccount, _syncCancellation.Token);
             }
             await auditRepository.RecordAsync(
@@ -91,10 +93,9 @@ public partial class App : System.Windows.Application
             if (storeAccount?.StoreType == "restaurant")
             {
                 loadingWindow.SetStatus("Preparando salão, cardápio e caixa...");
-                var restaurant = new SqliteRestaurantRepository(database);
-                await restaurant.InitializeAsync();
+                await restaurantRepository.InitializeAsync();
                 var restaurantWindow = new RestaurantWindow(
-                    restaurant,
+                    restaurantRepository,
                     localAccounts,
                     accessControl,
                     productRepository,

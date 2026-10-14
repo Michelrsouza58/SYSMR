@@ -53,15 +53,19 @@ public sealed class SqliteRestaurantRepository(SqliteDatabase database)
         await connection.OpenAsync(cancellationToken);
         await using var command = connection.CreateCommand();
         command.CommandText = """
-            SELECT a.Id, a.Name, a.SortOrder, COALESCE(SUM(CASE WHEN t.IsActive = 1 THEN 1 ELSE 0 END), 0)
+            SELECT a.Id, a.Name, a.SortOrder, COALESCE(SUM(CASE WHEN t.IsActive = 1 THEN 1 ELSE 0 END), 0), a.IsActive
             FROM RestaurantAreas a LEFT JOIN RestaurantTables t ON t.AreaId = a.Id
-            GROUP BY a.Id ORDER BY a.SortOrder, a.Name;
+            GROUP BY a.Id, a.IsActive ORDER BY a.SortOrder, a.Name;
             """;
         var result = new List<RestaurantAreaRecord>();
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
         while (await reader.ReadAsync(cancellationToken))
             result.Add(new RestaurantAreaRecord(
-                Guid.Parse(reader.GetString(0)), reader.GetString(1), reader.GetInt32(2), reader.GetInt32(3)));
+                Guid.Parse(reader.GetString(0)),
+                reader.GetString(1),
+                reader.GetInt32(2),
+                reader.GetInt32(3),
+                reader.GetInt64(4) != 0));
         return result;
     }
 
@@ -76,20 +80,23 @@ public sealed class SqliteRestaurantRepository(SqliteDatabase database)
         command.Transaction = (SqliteTransaction)transaction;
         command.CommandText = """
             INSERT INTO RestaurantAreas (Id, Name, SortOrder)
-            VALUES ($id, $name, COALESCE((SELECT MAX(SortOrder) + 1 FROM RestaurantAreas), 0));
+            VALUES ($id, $name, COALESCE((SELECT MAX(SortOrder) + 1 FROM RestaurantAreas), 0))
+            RETURNING SortOrder;
             """;
         command.Parameters.AddWithValue("$id", id.ToString());
         command.Parameters.AddWithValue("$name", name);
         try
         {
-            await command.ExecuteNonQueryAsync(cancellationToken);
+            var sortOrder = Convert.ToInt32(
+                await command.ExecuteScalarAsync(cancellationToken),
+                CultureInfo.InvariantCulture);
             await SqliteSyncOutboxRepository.EnqueueAsync(
                 connection,
                 (SqliteTransaction)transaction,
                 "restaurant",
                 "area",
                 id.ToString(),
-                new { id, name },
+                new { id, name, sortOrder, isActive = true },
                 cancellationToken);
             await transaction.CommitAsync(cancellationToken);
             return id;
@@ -98,6 +105,62 @@ public sealed class SqliteRestaurantRepository(SqliteDatabase database)
         {
             throw new InvalidOperationException($"A área '{name}' já existe.", exception);
         }
+    }
+
+    public async Task SetAreaActiveAsync(
+        Guid areaId,
+        bool isActive,
+        CancellationToken cancellationToken = default)
+    {
+        await using var connection = database.CreateConnection();
+        await connection.OpenAsync(cancellationToken);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+
+        await using var verify = connection.CreateCommand();
+        verify.Transaction = (SqliteTransaction)transaction;
+        verify.CommandText = """
+            SELECT IsActive,
+                   EXISTS (SELECT 1 FROM RestaurantOrders o
+                           JOIN RestaurantTables t ON t.Id = o.TableId
+                           WHERE t.AreaId = RestaurantAreas.Id AND o.Status = 'Open'),
+                   (SELECT COUNT(*) FROM RestaurantAreas WHERE IsActive = 1)
+            FROM RestaurantAreas WHERE Id = $areaId;
+            """;
+        verify.Parameters.AddWithValue("$areaId", areaId.ToString());
+        await using var reader = await verify.ExecuteReaderAsync(cancellationToken);
+        if (!await reader.ReadAsync(cancellationToken))
+            throw new InvalidOperationException("A área selecionada não existe.");
+        var wasActive = reader.GetInt64(0) != 0;
+        var hasOpenOrders = reader.GetInt64(1) != 0;
+        var activeAreaCount = reader.GetInt64(2);
+        await reader.DisposeAsync();
+
+        if (wasActive == isActive)
+        {
+            await transaction.CommitAsync(cancellationToken);
+            return;
+        }
+        if (!isActive && hasOpenOrders)
+            throw new InvalidOperationException("Feche as comandas abertas da área antes de desativá-la.");
+        if (!isActive && activeAreaCount <= 1)
+            throw new InvalidOperationException("Mantenha pelo menos uma área ativa no restaurante.");
+
+        await using var update = connection.CreateCommand();
+        update.Transaction = (SqliteTransaction)transaction;
+        update.CommandText = "UPDATE RestaurantAreas SET IsActive = $isActive WHERE Id = $areaId;";
+        update.Parameters.AddWithValue("$isActive", isActive ? 1 : 0);
+        update.Parameters.AddWithValue("$areaId", areaId.ToString());
+        await update.ExecuteNonQueryAsync(cancellationToken);
+
+        await SqliteSyncOutboxRepository.EnqueueAsync(
+            connection,
+            (SqliteTransaction)transaction,
+            "restaurant",
+            "area",
+            areaId.ToString(),
+            new { areaId, isActive },
+            cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
     }
 
     public async Task SetTableCountAsync(Guid areaId, int count, CancellationToken cancellationToken = default)
@@ -110,10 +173,13 @@ public sealed class SqliteRestaurantRepository(SqliteDatabase database)
 
         await using var verify = connection.CreateCommand();
         verify.Transaction = (SqliteTransaction)transaction;
-        verify.CommandText = "SELECT COUNT(*) FROM RestaurantAreas WHERE Id = $areaId;";
+        verify.CommandText = "SELECT IsActive FROM RestaurantAreas WHERE Id = $areaId;";
         verify.Parameters.AddWithValue("$areaId", areaId.ToString());
-        if (Convert.ToInt32(await verify.ExecuteScalarAsync(cancellationToken), CultureInfo.InvariantCulture) != 1)
+        var areaIsActive = await verify.ExecuteScalarAsync(cancellationToken);
+        if (areaIsActive is null || areaIsActive == DBNull.Value)
             throw new InvalidOperationException("A área selecionada não existe.");
+        if (Convert.ToInt32(areaIsActive, CultureInfo.InvariantCulture) != 1)
+            throw new InvalidOperationException("Não é possível alterar as mesas de uma área desativada.");
 
         await using var currentCommand = connection.CreateCommand();
         currentCommand.Transaction = (SqliteTransaction)transaction;
@@ -172,7 +238,10 @@ public sealed class SqliteRestaurantRepository(SqliteDatabase database)
         await transaction.CommitAsync(cancellationToken);
     }
 
-    public async Task<IReadOnlyList<RestaurantTableRecord>> GetTablesAsync(Guid areaId, CancellationToken cancellationToken = default)
+    public async Task<IReadOnlyList<RestaurantTableRecord>> GetTablesAsync(
+        Guid areaId,
+        CancellationToken cancellationToken = default,
+        bool includeInactive = false)
     {
         await using var connection = database.CreateConnection();
         await connection.OpenAsync(cancellationToken);
@@ -181,13 +250,19 @@ public sealed class SqliteRestaurantRepository(SqliteDatabase database)
             SELECT t.Id, t.AreaId, t.Number, COALESCE(o.Id, ''), ROUND(COALESCE((
                 SELECT SUM(CAST(i.Quantity AS REAL) * CAST(i.UnitPrice AS REAL))
                 FROM RestaurantOrderItems i WHERE i.OrderId = o.Id), 0) *
-                (1 + CASE WHEN COALESCE(o.WaiterServiceChargeEnabled, 0) = 1 THEN 0.10 ELSE 0 END), 2)
+                (1 + CASE WHEN COALESCE(o.WaiterServiceChargeEnabled, 0) = 1 THEN 0.10 ELSE 0 END), 2),
+                t.IsActive
             FROM RestaurantTables t
             LEFT JOIN RestaurantOrders o ON o.TableId = t.Id AND o.Status = 'Open'
-            WHERE t.AreaId = $areaId AND t.IsActive = 1
+            WHERE t.AreaId = $areaId
+              AND ($includeInactive = 1 OR (
+                  t.IsActive = 1
+                  AND EXISTS (SELECT 1 FROM RestaurantAreas a WHERE a.Id = t.AreaId AND a.IsActive = 1)
+              ))
             ORDER BY t.Number;
             """;
         command.Parameters.AddWithValue("$areaId", areaId.ToString());
+        command.Parameters.AddWithValue("$includeInactive", includeInactive ? 1 : 0);
         var result = new List<RestaurantTableRecord>();
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
         while (await reader.ReadAsync(cancellationToken))
@@ -196,7 +271,8 @@ public sealed class SqliteRestaurantRepository(SqliteDatabase database)
                 Guid.Parse(reader.GetString(1)),
                 reader.GetInt32(2),
                 reader.GetString(3).Length > 0,
-                Convert.ToDecimal(reader.GetDouble(4), CultureInfo.InvariantCulture)));
+                Convert.ToDecimal(reader.GetDouble(4), CultureInfo.InvariantCulture),
+                reader.GetInt64(5) != 0));
         return result;
     }
 
@@ -286,11 +362,18 @@ public sealed class SqliteRestaurantRepository(SqliteDatabase database)
         await using var connection = database.CreateConnection();
         await connection.OpenAsync(cancellationToken);
         await using var command = connection.CreateCommand();
-        command.CommandText = "SELECT Id, Name, Role, IsActive FROM RestaurantEmployees ORDER BY IsActive DESC, Name;";
+        command.CommandText = "SELECT Id, Name, Role, IsActive, WaiterNumber, FirebaseUid, AreaIds FROM RestaurantEmployees ORDER BY IsActive DESC, Name;";
         var result = new List<RestaurantEmployeeRecord>();
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
         while (await reader.ReadAsync(cancellationToken))
-            result.Add(new RestaurantEmployeeRecord(Guid.Parse(reader.GetString(0)), reader.GetString(1), reader.GetString(2), reader.GetInt64(3) != 0));
+            result.Add(new RestaurantEmployeeRecord(
+                Guid.Parse(reader.GetString(0)),
+                reader.GetString(1),
+                reader.GetString(2),
+                reader.GetInt64(3) != 0,
+                reader.IsDBNull(4) ? null : reader.GetString(4),
+                reader.IsDBNull(5) ? null : reader.GetString(5),
+                reader.GetString(6)));
         return result;
     }
 
@@ -303,14 +386,18 @@ public sealed class SqliteRestaurantRepository(SqliteDatabase database)
         await using var command = connection.CreateCommand();
         command.Transaction = (SqliteTransaction)transaction;
         command.CommandText = """
-            INSERT INTO RestaurantEmployees (Id, Name, Role, IsActive)
-            VALUES ($id, $name, $role, $active)
-            ON CONFLICT(Id) DO UPDATE SET Name=excluded.Name, Role=excluded.Role, IsActive=excluded.IsActive;
+            INSERT INTO RestaurantEmployees (Id, Name, Role, IsActive, WaiterNumber, FirebaseUid, AreaIds)
+            VALUES ($id, $name, $role, $active, $waiterNumber, $firebaseUid, $areaIds)
+            ON CONFLICT(Id) DO UPDATE SET Name=excluded.Name, Role=excluded.Role, IsActive=excluded.IsActive,
+                WaiterNumber=excluded.WaiterNumber, FirebaseUid=excluded.FirebaseUid, AreaIds=excluded.AreaIds;
             """;
         command.Parameters.AddWithValue("$id", employee.Id.ToString());
         command.Parameters.AddWithValue("$name", name);
         command.Parameters.AddWithValue("$role", string.IsNullOrWhiteSpace(employee.Role) ? "Atendente" : employee.Role.Trim());
         command.Parameters.AddWithValue("$active", employee.IsActive ? 1 : 0);
+        command.Parameters.AddWithValue("$waiterNumber", (object?)employee.WaiterNumber ?? DBNull.Value);
+        command.Parameters.AddWithValue("$firebaseUid", (object?)employee.FirebaseUid ?? DBNull.Value);
+        command.Parameters.AddWithValue("$areaIds", employee.AreaIds ?? string.Empty);
         try
         {
             await command.ExecuteNonQueryAsync(cancellationToken);
@@ -320,13 +407,25 @@ public sealed class SqliteRestaurantRepository(SqliteDatabase database)
                 "restaurant",
                 "employee",
                 employee.Id.ToString(),
-                new { employee.Id, name, employee.Role, employee.IsActive },
+                new
+                {
+                    employee.Id,
+                    name,
+                    employee.Role,
+                    employee.IsActive,
+                    employee.WaiterNumber,
+                    employee.FirebaseUid,
+                    employee.AreaIds
+                },
                 cancellationToken);
             await transaction.CommitAsync(cancellationToken);
         }
         catch (SqliteException exception) when (exception.SqliteErrorCode == 19)
         {
-            throw new InvalidOperationException($"O funcionário '{name}' já está cadastrado.", exception);
+            var message = exception.Message.Contains("WaiterNumber", StringComparison.OrdinalIgnoreCase)
+                ? $"Já existe um funcionário com o número '{employee.WaiterNumber}'."
+                : $"O funcionário '{name}' já está cadastrado.";
+            throw new InvalidOperationException(message, exception);
         }
     }
 
@@ -342,7 +441,9 @@ public sealed class SqliteRestaurantRepository(SqliteDatabase database)
         command.CommandText = """
             INSERT INTO RestaurantOrders (Id, TableId, EmployeeId, OpenedAt, Status)
             SELECT $id, t.Id, $employeeId, $openedAt, 'Open'
-            FROM RestaurantTables t WHERE t.Id = $tableId;
+            FROM RestaurantTables t
+            JOIN RestaurantAreas a ON a.Id = t.AreaId
+            WHERE t.Id = $tableId AND t.IsActive = 1 AND a.IsActive = 1;
             """;
         command.Parameters.AddWithValue("$id", orderId.ToString());
         command.Parameters.AddWithValue("$tableId", tableId.ToString());
@@ -393,7 +494,7 @@ public sealed class SqliteRestaurantRepository(SqliteDatabase database)
 
         await using var itemsCommand = connection.CreateCommand();
         itemsCommand.CommandText = """
-            SELECT Id, MenuItemName, Quantity, UnitPrice FROM RestaurantOrderItems
+            SELECT Id, MenuItemName, Quantity, UnitPrice, Observation FROM RestaurantOrderItems
             WHERE OrderId = $orderId ORDER BY rowid;
             """;
         itemsCommand.Parameters.AddWithValue("$orderId", id.ToString());
@@ -404,7 +505,8 @@ public sealed class SqliteRestaurantRepository(SqliteDatabase database)
                 Guid.Parse(itemsReader.GetString(0)),
                 itemsReader.GetString(1),
                 decimal.Parse(itemsReader.GetString(2), CultureInfo.InvariantCulture),
-                decimal.Parse(itemsReader.GetString(3), CultureInfo.InvariantCulture)));
+                decimal.Parse(itemsReader.GetString(3), CultureInfo.InvariantCulture),
+                itemsReader.IsDBNull(4) ? null : itemsReader.GetString(4)));
         await itemsReader.DisposeAsync();
         await using var paidCommand = connection.CreateCommand();
         paidCommand.CommandText = """
@@ -428,11 +530,184 @@ public sealed class SqliteRestaurantRepository(SqliteDatabase database)
         Guid? employeeId,
         CancellationToken cancellationToken = default)
     {
+        await AddOrderItemAsync(tableId, menuItemId, quantity, employeeId, null, cancellationToken);
+    }
+
+    public async Task AddOrderItemAsync(
+        Guid tableId,
+        Guid menuItemId,
+        decimal quantity,
+        Guid? employeeId,
+        string? observation,
+        CancellationToken cancellationToken = default)
+    {
+        await AddOrderItemCoreAsync(
+            tableId, menuItemId, quantity, employeeId, NormalizeObservation(observation), null, null, null, cancellationToken);
+    }
+
+    public async Task<WaiterCommandResult> ProcessWaiterCommandAsync(
+        WaiterCommandRecord command,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+        if (string.IsNullOrWhiteSpace(command.Id))
+            throw new ArgumentException("O comando do garçom não possui identificador.", nameof(command));
+
+        var previousResult = await GetWaiterCommandResultAsync(command.Id, cancellationToken);
+        if (previousResult is not null)
+            return previousResult;
+
+        try
+        {
+            if (!Guid.TryParse(command.Id, out _))
+                throw new InvalidOperationException("O identificador do comando não é um GUID válido.");
+            if (!string.Equals(command.Type, "addItem", StringComparison.Ordinal))
+                throw new InvalidOperationException("Tipo de comando do garçom não suportado.");
+            if (!string.Equals(command.Status, "pending", StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException("O comando não está pendente.");
+            if (string.IsNullOrWhiteSpace(command.EmployeeUid))
+                throw new InvalidOperationException("O comando não identifica o garçom.");
+            if (!Guid.TryParse(command.AreaId, out var areaId) ||
+                !Guid.TryParse(command.TableId, out var tableId) ||
+                !Guid.TryParse(command.MenuItemId, out var menuItemId))
+                throw new InvalidOperationException("A área, mesa ou produto do comando não possui um identificador válido.");
+            if (command.Quantity is <= 0 or > 99)
+                throw new InvalidOperationException("A quantidade do item deve ser maior que zero e não pode ultrapassar 99.");
+
+            var employee = (await GetEmployeesAsync(cancellationToken))
+                .SingleOrDefault(candidate =>
+                    candidate.FirebaseUid?.Equals(command.EmployeeUid, StringComparison.Ordinal) == true);
+            if (employee is null || !employee.IsActive)
+                throw new InvalidOperationException("O garçom vinculado ao comando não está cadastrado ou ativo nesta loja.");
+
+            var authorizedAreaIds = (employee.AreaIds ?? string.Empty)
+                .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .Select(value => Guid.TryParse(value, out var id) ? id : Guid.Empty)
+                .ToHashSet();
+            if (!authorizedAreaIds.Contains(areaId))
+                throw new InvalidOperationException("O garçom não está autorizado a lançar pedidos nesta área.");
+
+            var orderId = await AddOrderItemCoreAsync(
+                tableId,
+                menuItemId,
+                command.Quantity,
+                employee.Id,
+                NormalizeObservation(command.Observation),
+                command.Id,
+                command.EmployeeUid,
+                areaId,
+                cancellationToken);
+            return new WaiterCommandResult("applied", null, orderId);
+        }
+        catch (Exception exception) when (exception is InvalidOperationException or FormatException or ArgumentException)
+        {
+            return await SaveRejectedWaiterCommandAsync(command.Id, exception.Message, cancellationToken);
+        }
+    }
+
+    private async Task<WaiterCommandResult?> GetWaiterCommandResultAsync(
+        string commandId,
+        CancellationToken cancellationToken)
+    {
+        await using var connection = database.CreateConnection();
+        await connection.OpenAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT Status, Message, OrderId
+            FROM RestaurantWaiterCommands WHERE CommandId = $commandId;
+            """;
+        command.Parameters.AddWithValue("$commandId", commandId);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        if (!await reader.ReadAsync(cancellationToken))
+            return null;
+        return new WaiterCommandResult(
+            reader.GetString(0),
+            reader.IsDBNull(1) ? null : reader.GetString(1),
+            reader.IsDBNull(2) ? null : Guid.Parse(reader.GetString(2)));
+    }
+
+    private async Task<WaiterCommandResult> SaveRejectedWaiterCommandAsync(
+        string commandId,
+        string message,
+        CancellationToken cancellationToken)
+    {
+        await using var connection = database.CreateConnection();
+        await connection.OpenAsync(cancellationToken);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+        await using (var insert = connection.CreateCommand())
+        {
+            insert.Transaction = (SqliteTransaction)transaction;
+            insert.CommandText = """
+                INSERT OR IGNORE INTO RestaurantWaiterCommands
+                    (CommandId, Status, Message, OrderId, ProcessedAt)
+                VALUES ($commandId, 'rejected', $message, NULL, $processedAt);
+                """;
+            insert.Parameters.AddWithValue("$commandId", commandId);
+            insert.Parameters.AddWithValue("$message", message);
+            insert.Parameters.AddWithValue("$processedAt", DateTimeOffset.UtcNow.ToString("O", CultureInfo.InvariantCulture));
+            await insert.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        await using var read = connection.CreateCommand();
+        read.Transaction = (SqliteTransaction)transaction;
+        read.CommandText = """
+            SELECT Status, Message, OrderId
+            FROM RestaurantWaiterCommands WHERE CommandId = $commandId;
+            """;
+        read.Parameters.AddWithValue("$commandId", commandId);
+        await using var reader = await read.ExecuteReaderAsync(cancellationToken);
+        if (!await reader.ReadAsync(cancellationToken))
+            throw new InvalidOperationException("Não foi possível persistir o resultado do comando do garçom.");
+        var result = new WaiterCommandResult(
+            reader.GetString(0),
+            reader.IsDBNull(1) ? null : reader.GetString(1),
+            reader.IsDBNull(2) ? null : Guid.Parse(reader.GetString(2)));
+        await reader.DisposeAsync();
+        await transaction.CommitAsync(cancellationToken);
+        return result;
+    }
+
+    private async Task<Guid> AddOrderItemCoreAsync(
+        Guid tableId,
+        Guid menuItemId,
+        decimal quantity,
+        Guid? employeeId,
+        string? observation,
+        string? waiterCommandId,
+        string? waiterUid,
+        Guid? authorizedAreaId,
+        CancellationToken cancellationToken)
+    {
         if (quantity <= 0)
             throw new ArgumentOutOfRangeException(nameof(quantity), "A quantidade deve ser maior que zero.");
         await using var connection = database.CreateConnection();
         await connection.OpenAsync(cancellationToken);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+        if (waiterCommandId is not null)
+        {
+            if (employeeId is null || string.IsNullOrWhiteSpace(waiterUid) || authorizedAreaId is null)
+                throw new InvalidOperationException("O comando do garçom não possui autorização local completa.");
+
+            await using var verifyWaiter = connection.CreateCommand();
+            verifyWaiter.Transaction = (SqliteTransaction)transaction;
+            verifyWaiter.CommandText = """
+                SELECT FirebaseUid, IsActive, AreaIds
+                FROM RestaurantEmployees WHERE Id = $employeeId;
+                """;
+            verifyWaiter.Parameters.AddWithValue("$employeeId", employeeId.Value.ToString());
+            await using var waiterReader = await verifyWaiter.ExecuteReaderAsync(cancellationToken);
+            if (!await waiterReader.ReadAsync(cancellationToken) ||
+                waiterReader.IsDBNull(0) ||
+                !waiterReader.GetBoolean(1) ||
+                !waiterReader.GetString(0).Equals(waiterUid, StringComparison.Ordinal))
+                throw new InvalidOperationException("O garçom foi desativado ou seu vínculo Firebase foi alterado.");
+            var currentAreaIds = waiterReader.IsDBNull(2) ? string.Empty : waiterReader.GetString(2);
+            await waiterReader.DisposeAsync();
+            if (!currentAreaIds.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                    .Any(value => Guid.TryParse(value, out var id) && id == authorizedAreaId.Value))
+                throw new InvalidOperationException("O acesso do garçom a esta área foi removido.");
+        }
+
         string? orderId;
         string menuName;
         decimal unitPrice;
@@ -444,11 +719,14 @@ public sealed class SqliteRestaurantRepository(SqliteDatabase database)
             item.CommandText = """
                 SELECT o.Id, m.Name, m.Price, m.InventoryProductId, m.InventoryQuantityPerUnit
                 FROM RestaurantTables t
+                JOIN RestaurantAreas a ON a.Id = t.AreaId AND a.IsActive = 1
                 JOIN RestaurantMenuItems m ON m.Id = $menuItemId AND m.IsActive = 1
                 LEFT JOIN RestaurantOrders o ON o.TableId = t.Id AND o.Status = 'Open'
-                WHERE t.Id = $tableId AND t.IsActive = 1;
+                WHERE t.Id = $tableId AND t.IsActive = 1
+                  AND ($areaId IS NULL OR t.AreaId = $areaId);
                 """;
             item.Parameters.AddWithValue("$tableId", tableId.ToString());
+            item.Parameters.AddWithValue("$areaId", authorizedAreaId?.ToString() ?? (object)DBNull.Value);
             item.Parameters.AddWithValue("$menuItemId", menuItemId.ToString());
             await using var reader = await item.ExecuteReaderAsync(cancellationToken);
             if (!await reader.ReadAsync(cancellationToken))
@@ -537,8 +815,8 @@ public sealed class SqliteRestaurantRepository(SqliteDatabase database)
             insert.Transaction = (SqliteTransaction)transaction;
             insert.CommandText = """
                 INSERT INTO RestaurantOrderItems
-                    (Id, OrderId, MenuItemId, MenuItemName, Quantity, UnitPrice, InventoryProductId, InventoryQuantityPerUnit)
-                VALUES ($id, $orderId, $menuItemId, $name, $quantity, $unitPrice, $inventoryProductId, $inventoryQuantity);
+                    (Id, OrderId, MenuItemId, MenuItemName, Quantity, UnitPrice, InventoryProductId, InventoryQuantityPerUnit, Observation)
+                VALUES ($id, $orderId, $menuItemId, $name, $quantity, $unitPrice, $inventoryProductId, $inventoryQuantity, $observation);
                 """;
             insert.Parameters.AddWithValue("$id", orderItemId.ToString());
             insert.Parameters.AddWithValue("$orderId", orderId);
@@ -548,6 +826,7 @@ public sealed class SqliteRestaurantRepository(SqliteDatabase database)
             insert.Parameters.AddWithValue("$unitPrice", unitPrice.ToString(CultureInfo.InvariantCulture));
             insert.Parameters.AddWithValue("$inventoryProductId", inventoryProductId ?? (object)DBNull.Value);
             insert.Parameters.AddWithValue("$inventoryQuantity", inventoryQuantityPerUnit.ToString(CultureInfo.InvariantCulture));
+            insert.Parameters.AddWithValue("$observation", observation ?? string.Empty);
             await insert.ExecuteNonQueryAsync(cancellationToken);
         }
         await SqliteSyncOutboxRepository.EnqueueAsync(
@@ -556,9 +835,34 @@ public sealed class SqliteRestaurantRepository(SqliteDatabase database)
             "restaurant",
             "order-item",
             orderItemId.ToString(),
-            new { orderId, tableId, menuItemId, menuName, quantity, unitPrice },
+            new { orderId, tableId, menuItemId, menuName, quantity, unitPrice, observation },
             cancellationToken);
+        if (waiterCommandId is not null)
+        {
+            await using var processed = connection.CreateCommand();
+            processed.Transaction = (SqliteTransaction)transaction;
+            processed.CommandText = """
+                INSERT INTO RestaurantWaiterCommands (CommandId, Status, Message, OrderId, ProcessedAt)
+                VALUES ($commandId, 'applied', NULL, $orderId, $processedAt);
+                """;
+            processed.Parameters.AddWithValue("$commandId", waiterCommandId);
+            processed.Parameters.AddWithValue("$orderId", orderId);
+            processed.Parameters.AddWithValue("$processedAt", DateTimeOffset.UtcNow.ToString("O", CultureInfo.InvariantCulture));
+            await processed.ExecuteNonQueryAsync(cancellationToken);
+        }
+
         await transaction.CommitAsync(cancellationToken);
+        return Guid.Parse(orderId);
+    }
+
+    private static string? NormalizeObservation(string? observation)
+    {
+        if (string.IsNullOrWhiteSpace(observation))
+            return null;
+        var normalized = observation.Trim();
+        if (normalized.Length > 250)
+            throw new InvalidOperationException("A observação do item não pode ultrapassar 250 caracteres.");
+        return normalized;
     }
 
     public async Task RemoveOrderItemAsync(

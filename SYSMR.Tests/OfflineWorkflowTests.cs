@@ -1,8 +1,9 @@
+using System.Text.Json;
+using Microsoft.Data.Sqlite;
 using SYSMR.Application.Services;
 using SYSMR.Application.Models;
 using SYSMR.Domain.Entities;
 using SYSMR.Infrastructure.Persistence;
-using Microsoft.Data.Sqlite;
 
 namespace SYSMR.Tests;
 
@@ -402,6 +403,15 @@ public sealed class OfflineWorkflowTests : IAsyncLifetime
             FirebaseStoreAccountClient.CreateLoginEmail("001-ABC"),
             FirebaseStoreAccountClient.CreateLoginEmail("001-abc"));
         Assert.DoesNotContain("001-ABC", FirebaseStoreAccountClient.CreateLoginEmail("001-ABC"));
+        Assert.Equal("001-abc", FirebaseStoreAccountClient.CreateWaiterStoreSlug("001-ABC"));
+        Assert.Equal(
+            "garcom.001-abc.0042@login.sysmr.invalid",
+            FirebaseStoreAccountClient.CreateWaiterLoginEmail("001-abc", "0042"));
+        Assert.NotEqual(
+            FirebaseStoreAccountClient.CreateWaiterLoginEmail("001-abc", "0042"),
+            FirebaseStoreAccountClient.CreateWaiterLoginEmail("001-abc", "42"));
+        Assert.Throws<ArgumentException>(() => FirebaseStoreAccountClient.CreateWaiterStoreSlug("-01"));
+        Assert.Throws<ArgumentException>(() => FirebaseStoreAccountClient.CreateWaiterStoreSlug("01-"));
     }
 
     [Fact]
@@ -426,6 +436,57 @@ public sealed class OfflineWorkflowTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task RestaurantEmployeesCannotShareWaiterNumbers()
+    {
+        var restaurant = new SqliteRestaurantRepository(_database);
+        await restaurant.InitializeAsync();
+        var first = new RestaurantEmployeeRecord(Guid.NewGuid(), "Joana", "Garçom", true, "0042");
+        var duplicate = new RestaurantEmployeeRecord(Guid.NewGuid(), "Marcos", "Garçom", true, "0042");
+
+        await restaurant.SaveEmployeeAsync(first);
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            restaurant.SaveEmployeeAsync(duplicate));
+
+        Assert.Contains("número '0042'", exception.Message);
+        Assert.Single(await restaurant.GetEmployeesAsync());
+    }
+
+    [Fact]
+    public async Task RestaurantAreasCanBeDeactivatedWithoutDeletingStableTableIds()
+    {
+        var restaurant = new SqliteRestaurantRepository(_database);
+        await restaurant.InitializeAsync();
+        var mainArea = Assert.Single(await restaurant.GetAreasAsync());
+        var areaId = await restaurant.SaveAreaAsync("Varanda");
+        await restaurant.SetTableCountAsync(areaId, 2);
+        var originalTableIds = (await restaurant.GetTablesAsync(areaId))
+            .Select(table => table.Id)
+            .ToArray();
+
+        await restaurant.SetAreaActiveAsync(areaId, false);
+
+        var inactiveArea = Assert.Single((await restaurant.GetAreasAsync()).Where(area => area.Id == areaId));
+        Assert.False(inactiveArea.IsActive);
+        Assert.Empty(await restaurant.GetTablesAsync(areaId));
+        var retainedTables = await restaurant.GetTablesAsync(areaId, includeInactive: true);
+        Assert.Equal(originalTableIds, retainedTables.Select(table => table.Id));
+        Assert.All(retainedTables, table => Assert.True(table.IsActive));
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            restaurant.SetTableCountAsync(areaId, 3));
+
+        await restaurant.SetAreaActiveAsync(areaId, true);
+        var reactivatedArea = Assert.Single((await restaurant.GetAreasAsync()).Where(area => area.Id == areaId));
+        Assert.True(reactivatedArea.IsActive);
+        Assert.Equal(originalTableIds, (await restaurant.GetTablesAsync(areaId)).Select(table => table.Id));
+        Assert.True(mainArea.IsActive);
+
+        var areaEvents = (await new SqliteSyncOutboxRepository(_database).GetPendingAsync())
+            .Where(item => item.Entity == "area")
+            .ToArray();
+        Assert.Equal(3, areaEvents.Length);
+    }
+
+    [Fact]
     public async Task RestaurantTablesMenuOrdersAndCashWorkOffline()
     {
         var restaurant = new SqliteRestaurantRepository(_database);
@@ -438,13 +499,30 @@ public sealed class OfflineWorkflowTests : IAsyncLifetime
         var tables = await restaurant.GetTablesAsync(area.Id);
         Assert.Equal(2, tables.Count);
         var firstTable = tables[0];
-        var employee = new RestaurantEmployeeRecord(Guid.NewGuid(), "Joana", "Atendente", true);
+        var employee = new RestaurantEmployeeRecord(
+            Guid.NewGuid(), "Joana", "Atendente", true, "0042", "firebase-waiter-uid", area.Id.ToString());
         var inventoryProduct = await _products.FindByScaleCodeAsync("01234");
         Assert.NotNull(inventoryProduct);
         var menuItem = new RestaurantMenuItemRecord(
             Guid.NewGuid(), "Prato do dia", "Almoço", 24.90m, true, inventoryProduct.Id, 0.25m);
         await restaurant.SaveEmployeeAsync(employee);
+        var savedEmployee = Assert.Single(await restaurant.GetEmployeesAsync());
+        Assert.Equal(employee.WaiterNumber, savedEmployee.WaiterNumber);
+        Assert.Equal(employee.FirebaseUid, savedEmployee.FirebaseUid);
+        Assert.Equal(employee.AreaIds, savedEmployee.AreaIds);
         await restaurant.SaveMenuItemAsync(menuItem);
+        var menuSyncEvent = Assert.Single((await new SqliteSyncOutboxRepository(_database).GetPendingAsync())
+            .Where(item => item.Entity == "menu-item"));
+        Assert.Equal("restaurant", menuSyncEvent.Branch);
+        Assert.Equal(menuItem.Id.ToString(), menuSyncEvent.EntityId);
+        using (var menuPayload = JsonDocument.Parse(menuSyncEvent.Payload))
+        {
+            var payload = menuPayload.RootElement.GetProperty("payload");
+            Assert.Equal(menuItem.Name, payload.GetProperty("name").GetString());
+            Assert.Equal(menuItem.Category, payload.GetProperty("category").GetString());
+            Assert.Equal(menuItem.Price, payload.GetProperty("price").GetDecimal());
+            Assert.True(payload.GetProperty("isActive").GetBoolean());
+        }
 
         await Assert.ThrowsAsync<InvalidOperationException>(() =>
             restaurant.AddOrderItemAsync(firstTable.Id, menuItem.Id, 200m));
@@ -452,6 +530,8 @@ public sealed class OfflineWorkflowTests : IAsyncLifetime
         Assert.Null(await restaurant.GetOpenOrderAsync(firstTable.Id));
         Assert.False(Assert.Single((await restaurant.GetTablesAsync(area.Id)).Where(table => table.Id == firstTable.Id)).IsOccupied);
         await restaurant.AddOrderItemAsync(firstTable.Id, menuItem.Id, 2m, employee.Id);
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            restaurant.SetAreaActiveAsync(area.Id, false));
         var order = await restaurant.GetOpenOrderAsync(firstTable.Id);
         Assert.NotNull(order);
         Assert.Equal(49.80m, order.Total);
@@ -487,6 +567,86 @@ public sealed class OfflineWorkflowTests : IAsyncLifetime
         Assert.Equal(9, pendingRestaurantSync.Count(item => item.Branch == "restaurant"));
         await restaurant.CloseCashSessionAsync(cashSession.Id, 50m);
         Assert.Null(await restaurant.GetOpenCashSessionAsync());
+    }
+
+    [Fact]
+    public async Task WaiterCommandsAreAppliedIdempotentlyToLocalRestaurantOrders()
+    {
+        var restaurant = new SqliteRestaurantRepository(_database);
+        await restaurant.InitializeAsync();
+        var area = Assert.Single(await restaurant.GetAreasAsync());
+        var table = (await restaurant.GetTablesAsync(area.Id)).First();
+        var employee = new RestaurantEmployeeRecord(
+            Guid.NewGuid(), "Joana", "Garçom", true, "0042", "firebase-waiter-uid", area.Id.ToString());
+        var menuItem = new RestaurantMenuItemRecord(Guid.NewGuid(), "Suco", "Bebidas", 12.50m, true);
+        await restaurant.SaveEmployeeAsync(employee);
+        await restaurant.SaveMenuItemAsync(menuItem);
+
+        var command = new WaiterCommandRecord(
+            Guid.NewGuid().ToString(),
+            "addItem",
+            area.Id.ToString(),
+            table.Id.ToString(),
+            employee.FirebaseUid,
+            menuItem.Id.ToString(),
+            2m,
+            "pending",
+            DateTimeOffset.UtcNow.ToString("O"),
+            "Sem cebola e molho à parte");
+
+        var result = await restaurant.ProcessWaiterCommandAsync(command);
+        var duplicateResult = await restaurant.ProcessWaiterCommandAsync(command);
+
+        Assert.Equal("applied", result.Status);
+        Assert.Equal(result, duplicateResult);
+        Assert.NotNull(result.OrderId);
+        var order = await restaurant.GetOpenOrderAsync(table.Id);
+        Assert.NotNull(order);
+        Assert.Equal(2m, Assert.Single(order.Items).Quantity);
+        Assert.Equal(12.50m, order.Items[0].UnitPrice);
+        Assert.Equal("Sem cebola e molho à parte", order.Items[0].Observation);
+        var pendingEvents = await new SqliteSyncOutboxRepository(_database).GetPendingAsync();
+        Assert.Single(pendingEvents.Where(syncEvent => syncEvent.Entity == "order-item"));
+        await using var connection = _database.CreateConnection();
+        await connection.OpenAsync();
+        await using var inspect = connection.CreateCommand();
+        inspect.CommandText = "SELECT COUNT(*) FROM RestaurantWaiterCommands WHERE CommandId = $id AND Status = 'applied';";
+        inspect.Parameters.AddWithValue("$id", command.Id);
+        Assert.Equal(1L, await inspect.ExecuteScalarAsync());
+    }
+
+    [Fact]
+    public async Task WaiterCommandsFromUnassignedAreasAreRejectedWithoutOpeningOrders()
+    {
+        var restaurant = new SqliteRestaurantRepository(_database);
+        await restaurant.InitializeAsync();
+        var assignedArea = Assert.Single(await restaurant.GetAreasAsync());
+        var otherAreaId = await restaurant.SaveAreaAsync("Varanda");
+        await restaurant.SetTableCountAsync(otherAreaId, 2);
+        var table = (await restaurant.GetTablesAsync(otherAreaId)).First();
+        var employee = new RestaurantEmployeeRecord(
+            Guid.NewGuid(), "Joana", "Garçom", true, "0042", "firebase-waiter-uid", assignedArea.Id.ToString());
+        var menuItem = new RestaurantMenuItemRecord(Guid.NewGuid(), "Suco", "Bebidas", 12.50m, true);
+        await restaurant.SaveEmployeeAsync(employee);
+        await restaurant.SaveMenuItemAsync(menuItem);
+
+        var command = new WaiterCommandRecord(
+            Guid.NewGuid().ToString(),
+            "addItem",
+            otherAreaId.ToString(),
+            table.Id.ToString(),
+            employee.FirebaseUid,
+            menuItem.Id.ToString(),
+            1m,
+            "pending",
+            DateTimeOffset.UtcNow.ToString("O"));
+        var result = await restaurant.ProcessWaiterCommandAsync(command);
+        var repeatedResult = await restaurant.ProcessWaiterCommandAsync(command);
+
+        Assert.Equal("rejected", result.Status);
+        Assert.Equal(result, repeatedResult);
+        Assert.Contains("não está autorizado", result.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Null(await restaurant.GetOpenOrderAsync(table.Id));
     }
 
     [Fact]
