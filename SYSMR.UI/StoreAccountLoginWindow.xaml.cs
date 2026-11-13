@@ -216,8 +216,10 @@ public partial class StoreAccountLoginWindow : Window
         
         var result = MessageBox.Show(
             "Desvincular a loja remove a conta local e permite criar ou vincular outra loja.\n\n" +
-            "Deseja também APAGAR TODOS os dados locais (produtos, vendas, estoque, comandas)?\n\n" +
-            "• SIM = Apaga tudo e começa do zero\n" +
+            "Deseja também APAGAR os dados locais da loja (produtos, vendas, estoque, comandas e sincronizações pendentes)?\n\n" +
+            "Esta ação não apaga dados no Firebase. Faça um backup antes de prosseguir.\n" +
+            "As configurações deste computador, do Firebase e das impressoras serão mantidas.\n\n" +
+            "• SIM = Apaga os dados locais da loja\n" +
             "• NÃO = Mantém os dados locais (serão visíveis na nova loja)\n" +
             "• CANCELAR = Não faz nada",
             "Desvincular loja",
@@ -232,8 +234,6 @@ public partial class StoreAccountLoginWindow : Window
         try
         {
             await _localAccounts.RemoveAccountAsync(clearData);
-            await _auditLog.RecordAsync("Super Admin", "Loja desvinculada", 
-                clearData ? "Conta removida e dados locais apagados." : "Conta removida, dados locais mantidos.");
             StatusText.Text = clearData 
                 ? "Loja desvinculada e dados apagados. Crie uma nova conta." 
                 : "Loja desvinculada. Os dados locais serão visíveis na nova conta.";

@@ -1,4 +1,5 @@
 using System.Security.Cryptography;
+using System.Globalization;
 using Microsoft.Data.Sqlite;
 
 namespace SYSMR.Infrastructure.Persistence;
@@ -116,14 +117,15 @@ public sealed class SqliteStoreAccountRepository(SqliteDatabase database)
         
         if (clearLocalData)
         {
-            // Limpa todos os dados locais da loja
             var tables = new[]
             {
-                "Products", "Sales", "SaleItems", "Customers", "Sellers",
-                "RestaurantAreas", "RestaurantTables", "RestaurantMenuItems",
-                "RestaurantEmployees", "RestaurantPaymentItems", "RestaurantOrders", "RestaurantOrderItems",
-                "RestaurantPayments", "RestaurantCashSessions", "RestaurantExpenses",
-                "RestaurantCashMovements", "SyncOutbox", "AuditLog"
+                "RestaurantPaymentItems", "RestaurantPayments", "RestaurantOrderItems",
+                "RestaurantOrders", "RestaurantTables", "RestaurantAreas",
+                "RestaurantMenuItemOptions", "RestaurantMenuItems", "RestaurantEmployees",
+                "RestaurantExpenses", "RestaurantCashMovements", "RestaurantCashSessions",
+                "RestaurantWaiterCommands", "RestaurantItemChangeNotices",
+                "ReturnItems", "Returns", "SalePayments", "SaleItems", "Sales",
+                "CashMovements", "Customers", "Sellers", "Products", "SyncOutbox", "AuditLog"
             };
             
             foreach (var table in tables)
@@ -133,8 +135,28 @@ public sealed class SqliteStoreAccountRepository(SqliteDatabase database)
                 clearCommand.CommandText = $"DELETE FROM {table};";
                 await clearCommand.ExecuteNonQueryAsync(cancellationToken);
             }
+            await using var clearStoreSettings = connection.CreateCommand();
+            clearStoreSettings.Transaction = (SqliteTransaction)transaction;
+            clearStoreSettings.CommandText = """
+                DELETE FROM AppSettings
+                WHERE Key IN ('receipt.storeName', 'receipt.phone', 'receipt.address', 'receipt.footer',
+                              'printBatch.counter', 'restaurant.tables.defaultCount', 'waiter.commissionPercent');
+                """;
+            await clearStoreSettings.ExecuteNonQueryAsync(cancellationToken);
         }
-        
+
+        await using var audit = connection.CreateCommand();
+        audit.Transaction = (SqliteTransaction)transaction;
+        audit.CommandText = """
+            INSERT INTO AuditLog (Id, CreatedAt, Actor, Action, Details)
+            VALUES ($id, $createdAt, 'Super Admin', 'Loja desvinculada', $details);
+            """;
+        audit.Parameters.AddWithValue("$id", Guid.NewGuid().ToString());
+        audit.Parameters.AddWithValue("$createdAt", DateTimeOffset.UtcNow.ToString("O", CultureInfo.InvariantCulture));
+        audit.Parameters.AddWithValue("$details", clearLocalData
+            ? "Conta removida e dados locais apagados."
+            : "Conta removida, dados locais mantidos.");
+        await audit.ExecuteNonQueryAsync(cancellationToken);
         await transaction.CommitAsync(cancellationToken);
     }
 

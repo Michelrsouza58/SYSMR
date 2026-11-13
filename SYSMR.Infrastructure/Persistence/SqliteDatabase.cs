@@ -19,6 +19,9 @@ public sealed class SqliteDatabase(string databasePath)
 
         await using var connection = CreateConnection();
         await connection.OpenAsync(cancellationToken);
+        await using var inspectProducts = connection.CreateCommand();
+        inspectProducts.CommandText = "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'Products');";
+        var productsTableExists = Convert.ToInt64(await inspectProducts.ExecuteScalarAsync(cancellationToken)) != 0;
         var command = connection.CreateCommand();
         command.CommandText = """
             CREATE TABLE IF NOT EXISTS Products (
@@ -321,7 +324,8 @@ public sealed class SqliteDatabase(string databasePath)
                 """;
             await allocations.ExecuteNonQueryAsync(cancellationToken);
         }
-        await SeedProductsAsync(connection, cancellationToken);
+        if (!productsTableExists)
+            await SeedProductsAsync(connection, cancellationToken);
     }
 
     public SqliteConnection CreateConnection() => new(_connectionString);

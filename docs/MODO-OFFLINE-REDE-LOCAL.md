@@ -144,3 +144,20 @@ O rodapé do SYSMR mostra o estado: **"SEM PENDÊNCIAS"** ou **"N EVENTO(S) PEND
 - [ ] Impressoras da cozinha e do bar selecionadas em Configurações
 - [ ] QR Code do endereço impresso no balcão
 - [ ] Teste: pedido pelo celular → aparece no desktop → imprime na cozinha
+
+## 10. Desvincular uma loja deste computador
+
+Na tela de login, use **Desvincular loja** e autorize com o Super Admin.
+Escolher **Sim** remove do banco local os cadastros, garçons, comandas, caixa,
+vendas, histórico e eventos de sincronização pendentes. Faça um backup do banco
+`%LOCALAPPDATA%\SYSMR\sysmr.db` antes da operação, com o SYSMR fechado, e
+confira se existem pendências que ainda precisam ser sincronizadas. Após apagar,
+elas não poderão ser enviadas a partir deste computador.
+
+Essa operação **não apaga dados nem contas no Firebase**. Ela preserva a
+configuração do Firebase, as impressoras, o Super Admin e outras configurações
+do computador, além de registrar a desvinculação na auditoria. Dados do
+estabelecimento nos recibos e a numeração de pedidos são limpos. Ao entrar no
+módulo restaurante, o salão e as mesas padrão são recriados para a nova loja.
+Escolher **Não** desvincula a conta sem limpar os dados, que continuarão
+visíveis para a próxima loja.

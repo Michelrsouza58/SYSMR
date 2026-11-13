@@ -420,6 +420,132 @@ public sealed class OfflineWorkflowTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task UnlinkStoreWithClearRemovesDependentDataAndPreservesComputerConfiguration()
+    {
+        var accounts = new SqliteStoreAccountRepository(_database);
+        await accounts.SaveAuthenticatedAccountAsync("TEST-01", "Loja teste", "senha-segura", "store-uid", "restaurant");
+        await using (var connection = _database.CreateConnection())
+        {
+            await connection.OpenAsync();
+            await using var populate = connection.CreateCommand();
+            populate.CommandText = """
+                INSERT INTO AppSettings (Key, Value) VALUES
+                    ('firebase.projectId', 'project'), ('printer.kitchen', 'queue'),
+                    ('superadmin.hash', 'hash'), ('receipt.storeName', 'Loja antiga'),
+                    ('receipt.phone', '111'), ('receipt.address', 'Rua antiga'),
+                    ('receipt.footer', 'Antigo'), ('waiter.commissionPercent', '5'),
+                    ('printBatch.counter', '12'), ('restaurant.tables.defaultCount', '12');
+                INSERT INTO Customers VALUES ('customer', 'Cliente', '', '', '', '2026', '2027');
+                INSERT INTO Sellers VALUES ('seller', 'Vendedor', 1);
+                INSERT INTO Sales (Id, CreatedAt, PaymentMethod, Total) VALUES ('sale', '2026', 'Cash', '10');
+                INSERT INTO SaleItems (SaleId, ProductId, ProductName, Quantity, UnitPrice, Total)
+                    VALUES ('sale', 'product', 'Produto', '1', '10', '10');
+                INSERT INTO SalePayments VALUES ('sp', 'sale', '2026', 'Cash', '10');
+                INSERT INTO Returns VALUES ('return', 'sale', '2026', '10', 'Cash', 0);
+                INSERT INTO ReturnItems (ReturnId, ProductId, ProductName, Quantity, UnitPrice, Total)
+                    VALUES ('return', 'product', 'Produto', '1', '10', '10');
+                INSERT INTO CashMovements VALUES ('cm', '2026', 'Sale', 'Cash', '10', 'sale');
+                INSERT INTO RestaurantAreas (Id, Name) VALUES ('area', 'Área');
+                INSERT INTO RestaurantTables (Id, AreaId, Number) VALUES ('table', 'area', 1);
+                INSERT INTO RestaurantEmployees (Id, Name) VALUES ('employee', 'Garçom');
+                INSERT INTO RestaurantMenuItems (Id, Name, Price, InventoryProductId)
+                    SELECT 'menu', 'Item', '10', Id FROM Products LIMIT 1;
+                INSERT INTO RestaurantMenuItemOptions (Id, MenuItemId, Name) VALUES ('option', 'menu', 'Opção');
+                INSERT INTO RestaurantOrders (Id, TableId, EmployeeId, OpenedAt) VALUES ('order', 'table', 'employee', '2026');
+                INSERT INTO RestaurantOrderItems (Id, OrderId, MenuItemId, MenuItemName, Quantity, UnitPrice, InventoryProductId, SendingEmployeeId)
+                    SELECT 'item', 'order', 'menu', 'Item', '2', '10', Id, 'employee' FROM Products LIMIT 1;
+                INSERT INTO RestaurantCashSessions (Id, OpenedAt, OpeningAmount) VALUES ('session', '2026', '0');
+                INSERT INTO RestaurantPayments VALUES ('payment', 'order', 'session', '2026', 'Cash', '10');
+                INSERT INTO RestaurantPaymentItems VALUES ('payment', 'item', '1');
+                INSERT INTO RestaurantExpenses VALUES ('expense', '2026', 'Geral', 'Gasto', '1', 1, 'session');
+                INSERT INTO RestaurantCashMovements VALUES ('rcm', 'session', '2026', 'Supply', '1', '');
+                INSERT INTO RestaurantWaiterCommands VALUES ('command', 'applied', NULL, 'order', '2026');
+                INSERT INTO RestaurantItemChangeNotices VALUES ('notice', 'order', 1, 'Área', 'Item', 'kitchen', NULL, 'remove', '', '', '2026', 'pending', NULL);
+                INSERT INTO SyncOutbox (Id, Branch, Entity, EntityId, Payload, CreatedAt)
+                    VALUES ('outbox', 'restaurant', 'item', 'item', '{}', '2026');
+                INSERT INTO AuditLog VALUES ('audit', '2026', 'Operador', 'Venda', 'Antiga');
+                """;
+            await populate.ExecuteNonQueryAsync();
+        }
+
+        await accounts.RemoveAccountAsync(clearLocalData: true);
+        Assert.False(await accounts.HasAccountAsync());
+        await _database.InitializeAsync();
+        await using var verify = _database.CreateConnection();
+        await verify.OpenAsync();
+        var tables = new[]
+        {
+            "Products", "Sales", "SaleItems", "SalePayments", "Returns", "ReturnItems", "CashMovements",
+            "Customers", "Sellers", "RestaurantAreas", "RestaurantTables", "RestaurantEmployees",
+            "RestaurantMenuItems", "RestaurantMenuItemOptions", "RestaurantOrders", "RestaurantOrderItems",
+            "RestaurantPayments", "RestaurantPaymentItems", "RestaurantCashSessions", "RestaurantExpenses",
+            "RestaurantCashMovements", "RestaurantWaiterCommands", "RestaurantItemChangeNotices", "SyncOutbox"
+        };
+        foreach (var table in tables)
+        {
+            await using var count = verify.CreateCommand();
+            count.CommandText = $"SELECT COUNT(*) FROM {table};";
+            Assert.Equal(0L, await count.ExecuteScalarAsync());
+        }
+        await using var settings = verify.CreateCommand();
+        settings.CommandText = """
+            SELECT COUNT(*) FROM AppSettings WHERE Key IN
+            ('receipt.storeName', 'receipt.phone', 'receipt.address', 'receipt.footer',
+             'waiter.commissionPercent', 'printBatch.counter', 'restaurant.tables.defaultCount');
+            """;
+        Assert.Equal(0L, await settings.ExecuteScalarAsync());
+        var access = new SqliteAccessControl(_database);
+        Assert.Equal("project", await access.GetSettingAsync("firebase.projectId"));
+        Assert.Equal("queue", await access.GetSettingAsync("printer.kitchen"));
+        Assert.Equal("hash", await access.GetSettingAsync("superadmin.hash"));
+        var audit = Assert.Single(await new SqliteAuditLogRepository(_database).SearchAsync(""));
+        Assert.Equal("Loja desvinculada", audit.Action);
+        await accounts.SaveAuthenticatedAccountAsync("TEST-02", "Nova loja", "senha-segura", "new-store-uid", "restaurant");
+        var restaurant = new SqliteRestaurantRepository(_database);
+        await restaurant.InitializeAsync();
+        Assert.Empty(await restaurant.GetEmployeesAsync());
+        Assert.Single(await restaurant.GetAreasAsync());
+        Assert.Equal("new-store-uid", (await accounts.GetRememberedAccountAsync())!.FirebaseUid);
+    }
+
+    [Fact]
+    public async Task UnlinkStoreWithoutClearKeepsLocalData()
+    {
+        var accounts = new SqliteStoreAccountRepository(_database);
+        await accounts.SaveAuthenticatedAccountAsync("TEST-01", "Loja teste", "senha-segura", "store-uid");
+        await accounts.RemoveAccountAsync(clearLocalData: false);
+        Assert.False(await accounts.HasAccountAsync());
+        Assert.NotNull(await _products.FindByBarcodeAsync("7891000100103"));
+        Assert.Single(await new SqliteAuditLogRepository(_database).SearchAsync("Loja desvinculada"));
+    }
+
+    [Fact]
+    public async Task UnlinkStoreRollsBackAllChangesIfCleanupFails()
+    {
+        var accounts = new SqliteStoreAccountRepository(_database);
+        await accounts.SaveAuthenticatedAccountAsync("TEST-01", "Loja teste", "senha-segura", "store-uid");
+        await using (var connection = _database.CreateConnection())
+        {
+            await connection.OpenAsync();
+            await using var trigger = connection.CreateCommand();
+            trigger.CommandText = """
+                INSERT INTO Sellers VALUES ('seller', 'Vendedor', 1);
+                CREATE TRIGGER PreventProductDelete BEFORE DELETE ON Products
+                BEGIN SELECT RAISE(ABORT, 'falha simulada'); END;
+                """;
+            await trigger.ExecuteNonQueryAsync();
+        }
+        await Assert.ThrowsAsync<SqliteException>(() => accounts.RemoveAccountAsync(clearLocalData: true));
+        Assert.True(await accounts.HasAccountAsync());
+        Assert.NotNull(await _products.FindByBarcodeAsync("7891000100103"));
+        await using var verify = _database.CreateConnection();
+        await verify.OpenAsync();
+        await using var count = verify.CreateCommand();
+        count.CommandText = "SELECT COUNT(*) FROM Sellers;";
+        Assert.Equal(1L, await count.ExecuteScalarAsync());
+    }
+
+    [Fact]
     public async Task FirebaseRefreshTokenIsProtectedForTheWindowsUser()
     {
         if (!OperatingSystem.IsWindows())
