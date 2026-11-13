@@ -45,12 +45,22 @@
                                         Background="#17233B" Foreground="White" BorderThickness="0" Margin="0,16,0,0"
                                         Click="Login_Click"/>
                                 <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,10,0,0">
+                                    <Button Content="Esqueci a senha" Padding="10,5" Foreground="#34445E"
+                                            Background="Transparent" BorderThickness="0" Click="ForgotPassword_Click"/>
+                                    <TextBlock Text="·" Foreground="#A4AFC0" VerticalAlignment="Center" Margin="4,0"/>
+                                    <Button Content="E-mail (local)" Padding="10,5" Foreground="#34445E"
+                                            Background="Transparent" BorderThickness="0" Click="ContactEmailLocal_Click"/>
+                                </StackPanel>
+                                <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,4,0,0">
                                     <Button Content="Configurar Firebase" Padding="10,5" Foreground="#34445E"
                                             Background="Transparent" BorderThickness="0" Click="ConfigureFirebase_Click"/>
                                     <TextBlock Text="·" Foreground="#A4AFC0" VerticalAlignment="Center" Margin="4,0"/>
                                     <Button x:Name="CreateAccountButton" Content="Criar conta da loja" Padding="10,5"
                                             Foreground="#34445E" Background="Transparent" BorderThickness="0"
                                             Click="CreateAccount_Click"/>
+                                    <TextBlock Text="·" Foreground="#A4AFC0" VerticalAlignment="Center" Margin="4,0"/>
+                                    <Button Content="Desvincular loja" Padding="10,5" Foreground="#B54708"
+                                            Background="Transparent" BorderThickness="0" Click="UnlinkAccount_Click"/>
                                 </StackPanel>
                             </StackPanel>
                         </TabItem>

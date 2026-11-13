@@ -1,0 +1,32 @@
+<Window x:Class="SYSMR.UI.StoreContactEmailLocalWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="E-mail de contato (Super Admin local)" Width="520" Height="520" ResizeMode="CanResize"
+        WindowStartupLocation="CenterOwner" Background="#F3F6FA">
+    <Grid Margin="28">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+        <TextBlock Text="E-mail de contato da loja" FontSize="23" FontWeight="Bold" Foreground="#17233B"/>
+        <TextBlock Grid.Row="1" TextWrapping="Wrap" Foreground="#748198" Margin="0,8,0,15"
+                   Text="Define o e-mail que recebe a recuperação de senha. Use o PIN do Super Admin local."/>
+        <StackPanel Grid.Row="2">
+            <TextBlock Text="UID da loja (Firebase)" FontWeight="SemiBold" Margin="0,0,0,5"/>
+            <TextBox x:Name="StoreUidBox" Padding="8" IsReadOnly="True" Background="#E2E8F0"/>
+            <TextBlock Text="E-mail de contato (vazio para remover)" FontWeight="SemiBold" Margin="0,10,0,5"/>
+            <TextBox x:Name="ContactEmailBox" Padding="8"/>
+            <TextBlock Text="PIN do Super Admin local" FontWeight="SemiBold" Margin="0,10,0,5"/>
+            <PasswordBox x:Name="LocalPinBox" Padding="8"/>
+        </StackPanel>
+        <TextBlock x:Name="StatusText" Grid.Row="3" Foreground="#B54708" TextWrapping="Wrap" Margin="0,10,0,0"/>
+        <StackPanel Grid.Row="5" Orientation="Horizontal" HorizontalAlignment="Right">
+            <Button Content="Cancelar" Margin="0,0,8,0" Padding="14,7" Click="Cancel_Click"/>
+            <Button x:Name="SaveButton" Content="Salvar e-mail" Padding="14,7" Background="#17233B" Foreground="White" Click="Save_Click"/>
+        </StackPanel>
+    </Grid>
+</Window>

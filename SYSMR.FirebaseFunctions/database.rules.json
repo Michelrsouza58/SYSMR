@@ -35,6 +35,7 @@
       }
     },
     "clients": {
+      ".indexOn": ["customerNumber"],
       "$uid": {
         ".read": "auth != null && auth.uid === $uid",
         "storeType": {
@@ -97,13 +98,13 @@
               ".indexOn": ["status"],
               "$commandId": {
                 ".read": "auth != null && (auth.uid === $uid || (auth.uid === data.child('employeeUid').val() && root.child('waiterDirectory').child(auth.uid).child('storeUid').val() === $uid && root.child('waiterDirectory').child(auth.uid).child('active').val() === true && root.child('clients').child($uid).child('restaurantAccess').child(auth.uid).child('active').val() === true && root.child('clients').child($uid).child('restaurantAccess').child(auth.uid).child('areas').child(data.child('areaId').val()).val() === true))",
-                ".write": "auth != null && ((auth.uid === $uid && root.child('clients').child($uid).child('storeType').val() === 'restaurant' && $branch === 'restaurant') || (!data.exists() && newData.child('status').val() === 'pending' && !newData.child('result').exists() && auth.uid === newData.child('employeeUid').val() && root.child('waiterDirectory').child(auth.uid).child('storeUid').val() === $uid && root.child('waiterDirectory').child(auth.uid).child('active').val() === true && root.child('clients').child($uid).child('storeType').val() === 'restaurant' && root.child('clients').child($uid).child('restaurantAccess').child(auth.uid).child('active').val() === true && root.child('clients').child($uid).child('restaurantAccess').child(auth.uid).child('role').val() === 'waiter' && root.child('clients').child($uid).child('restaurantAccess').child(auth.uid).child('areas').child(newData.child('areaId').val()).val() === true && root.child('clients').child($uid).child('branches').child('restaurant').child('restaurantLive').child('areas').child(newData.child('areaId').val()).child('tables').child(newData.child('tableId').val()).child('isActive').val() === true && root.child('clients').child($uid).child('branches').child('restaurant').child('restaurantLive').child('menu').child('items').child(newData.child('menuItemId').val()).child('isActive').val() === true))",
-                ".validate": "newData.hasChildren(['id', 'type', 'areaId', 'tableId', 'employeeUid', 'menuItemId', 'quantity', 'status', 'createdAt']) && newData.child('id').val() === $commandId && newData.child('type').val() === 'addItem'",
+                ".write": "auth != null && ((auth.uid === $uid && root.child('clients').child($uid).child('storeType').val() === 'restaurant' && $branch === 'restaurant') || (!data.exists() && $branch === 'restaurant' && newData.child('status').val() === 'pending' && !newData.child('result').exists() && auth.uid === newData.child('employeeUid').val() && root.child('waiterDirectory').child(auth.uid).child('storeUid').val() === $uid && root.child('waiterDirectory').child(auth.uid).child('active').val() === true && root.child('clients').child($uid).child('storeType').val() === 'restaurant' && root.child('clients').child($uid).child('restaurantAccess').child(auth.uid).child('active').val() === true && root.child('clients').child($uid).child('restaurantAccess').child(auth.uid).child('role').val() === 'waiter' && root.child('clients').child($uid).child('restaurantAccess').child(auth.uid).child('areas').child(newData.child('areaId').val()).val() === true && root.child('clients').child($uid).child('branches').child('restaurant').child('restaurantLive').child('areas').child(newData.child('areaId').val()).child('tables').child(newData.child('tableId').val()).child('isActive').val() === true && ((newData.child('type').val() === 'addItem' && root.child('clients').child($uid).child('branches').child('restaurant').child('restaurantLive').child('menu').child('items').child(newData.child('menuItemId').val()).child('isActive').val() === true) || (newData.child('type').val() === 'submitOrder' && root.child('clients').child($uid).child('branches').child('restaurant').child('restaurantLive').child('menu').child('capabilities').child('submitOrder').val() === true) || newData.child('type').val() === 'removeItem' || newData.child('type').val() === 'updateObservation')))",
+                ".validate": "newData.hasChildren(['id', 'type', 'areaId', 'tableId', 'employeeUid', 'status', 'createdAt']) && newData.child('id').val() === $commandId && ((newData.child('type').val() === 'addItem' && newData.hasChildren(['menuItemId', 'quantity']) && !newData.child('orderItemId').exists() && !newData.child('items').exists()) || (newData.child('type').val() === 'submitOrder' && newData.hasChild('items') && !newData.child('menuItemId').exists() && !newData.child('orderItemId').exists() && !newData.child('quantity').exists() && !newData.child('options').exists() && !newData.child('observation').exists()) || (newData.child('type').val() === 'removeItem' && newData.hasChild('orderItemId') && !newData.child('menuItemId').exists() && !newData.child('quantity').exists() && !newData.child('observation').exists() && !newData.child('items').exists()) || (newData.child('type').val() === 'updateObservation' && newData.hasChildren(['orderItemId', 'observation']) && !newData.child('menuItemId').exists() && !newData.child('quantity').exists() && !newData.child('items').exists()))",
                 "id": {
                   ".validate": "newData.isString() && newData.val() === $commandId"
                 },
                 "type": {
-                  ".validate": "newData.val() === 'addItem'"
+                  ".validate": "newData.val() === 'addItem' || newData.val() === 'removeItem' || newData.val() === 'updateObservation' || newData.val() === 'submitOrder'"
                 },
                 "areaId": {
                   ".validate": "newData.isString() && newData.val().length > 0"
@@ -117,6 +118,9 @@
                 "menuItemId": {
                   ".validate": "newData.isString() && newData.val().length > 0"
                 },
+                "orderItemId": {
+                  ".validate": "newData.isString() && newData.val().length > 0"
+                },
                 "quantity": {
                   ".validate": "newData.isNumber() && newData.val() > 0 && newData.val() <= 99"
                 },
@@ -126,8 +130,49 @@
                 "createdAt": {
                   ".validate": "newData.isString() && newData.val().length > 0"
                 },
+                "customerName": {
+                  ".validate": "newData.isString() && newData.val().length > 0 && newData.val().length <= 100 && newData.parent().child('type').val() === 'submitOrder'"
+                },
                 "observation": {
                   ".validate": "newData.isString() && newData.val().length <= 250"
+                },
+                "items": {
+                  ".validate": "newData.parent().child('type').val() === 'submitOrder' && newData.hasChildren()",
+                  "$itemIndex": {
+                    ".validate": "newData.hasChildren(['menuItemId', 'quantity']) && root.child('clients').child($uid).child('branches').child('restaurant').child('restaurantLive').child('menu').child('items').child(newData.child('menuItemId').val()).child('isActive').val() === true",
+                    "menuItemId": { ".validate": "newData.isString() && newData.val().length > 0" },
+                    "quantity": { ".validate": "newData.isNumber() && newData.val() > 0 && newData.val() <= 99" },
+                    "size": { ".validate": "newData.val() === 'M' || newData.val() === 'G'" },
+                    "observation": { ".validate": "newData.isString() && newData.val().length <= 250" },
+                    "options": {
+                      "$optionIndex": {
+                        ".validate": "newData.hasChildren(['optionId', 'quantity'])",
+                        "optionId": { ".validate": "newData.isString() && newData.val().length > 0" },
+                        "quantity": { ".validate": "newData.isNumber() && newData.val() > 0 && newData.val() <= 99" },
+                        "extraPrice": { ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 9999" },
+                        "$other": { ".validate": false }
+                      }
+                    },
+                    "$other": { ".validate": false }
+                  }
+                },
+                "options": {
+                  ".validate": "newData.parent().child('type').val() === 'addItem' && newData.hasChildren()",
+                  "$optionIndex": {
+                    ".validate": "newData.hasChildren(['optionId', 'quantity'])",
+                    "optionId": {
+                      ".validate": "newData.isString() && newData.val().length > 0"
+                    },
+                    "quantity": {
+                      ".validate": "newData.isNumber() && newData.val() > 0 && newData.val() <= 99"
+                    },
+                    "extraPrice": {
+                      ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 9999"
+                    },
+                    "$other": {
+                      ".validate": false
+                    }
+                  }
                 },
                 "result": {
                   "message": {
@@ -144,7 +189,7 @@
                   }
                 },
                 "$other": {
-                  ".validate": "$other === 'id' || $other === 'type' || $other === 'areaId' || $other === 'tableId' || $other === 'employeeUid' || $other === 'menuItemId' || $other === 'quantity' || $other === 'status' || $other === 'createdAt' || $other === 'observation' || $other === 'result'"
+                  ".validate": "$other === 'id' || $other === 'type' || $other === 'areaId' || $other === 'tableId' || $other === 'employeeUid' || $other === 'menuItemId' || $other === 'orderItemId' || $other === 'quantity' || $other === 'status' || $other === 'createdAt' || $other === 'observation' || $other === 'options' || $other === 'items' || $other === 'customerName' || $other === 'result'"
                 }
               }
             }

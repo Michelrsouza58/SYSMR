@@ -164,6 +164,87 @@ public partial class StoreAccountLoginWindow : Window
         dialog.ShowDialog();
     }
 
+    private async void ForgotPassword_Click(object sender, RoutedEventArgs e)
+    {
+        StatusText.Text = string.Empty;
+        var number = CustomerNumberBox.Text.Trim();
+        var name = CustomerNameBox.Text.Trim();
+        if (string.IsNullOrWhiteSpace(number) || string.IsNullOrWhiteSpace(name))
+        {
+            StatusText.Text = "Informe o número e o nome da loja para recuperar a senha.";
+            return;
+        }
+
+        try
+        {
+            await _firebase.SendPasswordResetAsync(number, name);
+            StatusText.Text = "Enviamos um link de redefinição para o e-mail de contato cadastrado na loja. " +
+                              "Verifique a caixa de entrada e o spam.";
+        }
+        catch (Exception exception)
+        {
+            StatusText.Text = exception.Message;
+        }
+    }
+
+    private async void ContactEmail_Click(object sender, RoutedEventArgs e)
+    {
+        if (!await AuthorizeSuperAdminAsync())
+            return;
+        var dialog = new StoreContactEmailWindow(_firebase, _auditLog, CustomerNumberBox.Text.Trim()) { Owner = this };
+        dialog.ShowDialog();
+    }
+
+    private async void ContactEmailLocal_Click(object sender, RoutedEventArgs e)
+    {
+        if (!await AuthorizeSuperAdminAsync())
+            return;
+        var account = await _localAccounts.GetRememberedAccountAsync();
+        if (account is null)
+        {
+            StatusText.Text = "Nenhuma loja está vinculada a este computador.";
+            return;
+        }
+        var dialog = new StoreContactEmailLocalWindow(_firebase, _auditLog, account.FirebaseUid) { Owner = this };
+        dialog.ShowDialog();
+    }
+
+    private async void UnlinkAccount_Click(object sender, RoutedEventArgs e)
+    {
+        if (!await AuthorizeSuperAdminAsync())
+            return;
+        
+        var result = MessageBox.Show(
+            "Desvincular a loja remove a conta local e permite criar ou vincular outra loja.\n\n" +
+            "Deseja também APAGAR TODOS os dados locais (produtos, vendas, estoque, comandas)?\n\n" +
+            "• SIM = Apaga tudo e começa do zero\n" +
+            "• NÃO = Mantém os dados locais (serão visíveis na nova loja)\n" +
+            "• CANCELAR = Não faz nada",
+            "Desvincular loja",
+            MessageBoxButton.YesNoCancel,
+            MessageBoxImage.Warning);
+        
+        if (result == MessageBoxResult.Cancel)
+            return;
+        
+        var clearData = result == MessageBoxResult.Yes;
+
+        try
+        {
+            await _localAccounts.RemoveAccountAsync(clearData);
+            await _auditLog.RecordAsync("Super Admin", "Loja desvinculada", 
+                clearData ? "Conta removida e dados locais apagados." : "Conta removida, dados locais mantidos.");
+            StatusText.Text = clearData 
+                ? "Loja desvinculada e dados apagados. Crie uma nova conta." 
+                : "Loja desvinculada. Os dados locais serão visíveis na nova conta.";
+            CreateAccountButton.IsEnabled = true;
+        }
+        catch (Exception exception)
+        {
+            StatusText.Text = $"Não foi possível desvincular: {exception.Message}";
+        }
+    }
+
     private async void CreateAccount_Click(object sender, RoutedEventArgs e)
     {
         if (await _localAccounts.HasAccountAsync())

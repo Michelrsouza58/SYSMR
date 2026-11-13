@@ -103,6 +103,41 @@ public sealed class SqliteStoreAccountRepository(SqliteDatabase database)
             : null;
     }
 
+    public async Task RemoveAccountAsync(bool clearLocalData = false, CancellationToken cancellationToken = default)
+    {
+        await using var connection = database.CreateConnection();
+        await connection.OpenAsync(cancellationToken);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+        
+        await using var command = connection.CreateCommand();
+        command.Transaction = (SqliteTransaction)transaction;
+        command.CommandText = "DELETE FROM StoreAccountCache WHERE Id = 1;";
+        await command.ExecuteNonQueryAsync(cancellationToken);
+        
+        if (clearLocalData)
+        {
+            // Limpa todos os dados locais da loja
+            var tables = new[]
+            {
+                "Products", "Sales", "SaleItems", "Customers", "Sellers",
+                "RestaurantAreas", "RestaurantTables", "RestaurantMenuItems",
+                "RestaurantEmployees", "RestaurantPaymentItems", "RestaurantOrders", "RestaurantOrderItems",
+                "RestaurantPayments", "RestaurantCashSessions", "RestaurantExpenses",
+                "RestaurantCashMovements", "SyncOutbox", "AuditLog"
+            };
+            
+            foreach (var table in tables)
+            {
+                await using var clearCommand = connection.CreateCommand();
+                clearCommand.Transaction = (SqliteTransaction)transaction;
+                clearCommand.CommandText = $"DELETE FROM {table};";
+                await clearCommand.ExecuteNonQueryAsync(cancellationToken);
+            }
+        }
+        
+        await transaction.CommitAsync(cancellationToken);
+    }
+
     public async Task<string?> GetRefreshTokenAsync(CancellationToken cancellationToken = default)
     {
         await using var connection = database.CreateConnection();

@@ -44,7 +44,8 @@ public partial class StoreAccountCreationWindow : Window
                 password,
                 SuperAdminEmailBox.Text.Trim(),
                 SuperAdminPasswordBox.Password,
-                storeType);
+                storeType,
+                string.IsNullOrWhiteSpace(ContactEmailBox.Text) ? null : ContactEmailBox.Text.Trim());
             await _auditLog.RecordAsync("Super Admin", "Conta de loja criada", $"Conta {Account.CustomerNumber} cadastrada.");
             DialogResult = true;
         }

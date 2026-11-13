@@ -45,9 +45,33 @@
         <Grid Grid.Column="1" Margin="28,22,28,20">
             <Grid.RowDefinitions>
                 <RowDefinition Height="68"/>
+                <RowDefinition Height="Auto"/>
                 <RowDefinition Height="*"/>
                 <RowDefinition Height="28"/>
             </Grid.RowDefinitions>
+            <Border x:Name="OfflineAlert" Grid.Row="1" Visibility="Collapsed" Background="#FFF4E5" BorderBrush="#F5C98A"
+                    BorderThickness="1" CornerRadius="10" Padding="14,10" Margin="0,0,0,12">
+                <DockPanel>
+                    <Button x:Name="OfflineEnableServerButton" DockPanel.Dock="Right" Content="Ativar servidor local" Padding="14,7" Margin="14,0,0,0"
+                            Background="#B54708" Foreground="White" Click="OfflineEnableServer_Click"/>
+                    <StackPanel>
+                        <TextBlock Text="📡 Sem internet" FontWeight="Bold" Foreground="#B54708"/>
+                        <TextBlock x:Name="OfflineAlertText" Foreground="#7A4A12" TextWrapping="Wrap" Margin="0,2,0,0"
+                                   Text="Os garçons podem continuar atendendo pelo Wi-Fi da loja. Ative o servidor local para o webapp funcionar sem internet."/>
+                    </StackPanel>
+                </DockPanel>
+            </Border>
+            <Border x:Name="KitchenPrintAlert" Grid.Row="1" Visibility="Collapsed" Background="#FDECEA" BorderBrush="#F1B5AE"
+                    BorderThickness="1" CornerRadius="10" Padding="14,10" Margin="0,0,0,12">
+                <DockPanel>
+                    <Button x:Name="KitchenRetryButton" DockPanel.Dock="Right" Content="Reimprimir pendentes" Padding="14,7" Margin="14,0,0,0"
+                            Click="KitchenRetry_Click"/>
+                    <StackPanel>
+                        <TextBlock Text="⚠ Pedido não impresso na cozinha" FontWeight="Bold" Foreground="#B42318"/>
+                        <TextBlock x:Name="KitchenPrintAlertText" Foreground="#7A271A" TextWrapping="Wrap" Margin="0,2,0,0"/>
+                    </StackPanel>
+                </DockPanel>
+            </Border>
             <Grid Grid.Row="0">
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="*"/>
@@ -64,7 +88,7 @@
                     <Button Content="×" ToolTip="Fechar" FontSize="19" Width="36" Height="32" Padding="0" Margin="4,0,0,0" Foreground="#B42318" Click="Close_Click"/>
                 </StackPanel>
             </Grid>
-            <Grid Grid.Row="1">
+            <Grid Grid.Row="2">
                 <Grid x:Name="TablesPage">
                     <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
                     <Border Background="White" CornerRadius="10" BorderBrush="#E8EDF3" BorderThickness="1" Padding="12" Margin="0,0,0,14">
@@ -85,7 +109,7 @@
                                 </ItemsControl.ItemsPanel>
                                 <ItemsControl.ItemTemplate>
                                     <DataTemplate>
-                                        <Button Tag="{Binding}" Click="Table_Click" Width="170" Height="126" Margin="8" Padding="12" BorderThickness="1" BorderBrush="#D8DEE8">
+                                        <Button Tag="{Binding}" Click="Table_Click" Width="190" Height="175" Margin="8" Padding="12" BorderThickness="1" BorderBrush="#D8DEE8">
                                             <Button.Style>
                                                 <Style TargetType="Button">
                                                     <Setter Property="Background" Value="#E5E7EB"/>
@@ -110,6 +134,8 @@
                                                     <TextBlock Text="{Binding Number, StringFormat='Mesa {0}'}" FontSize="19" FontWeight="Bold" Foreground="#17233B" HorizontalAlignment="Center"/>
                                                     <TextBlock Text="{Binding StatusLabel}" FontSize="11" Foreground="#52627A" HorizontalAlignment="Center" Margin="0,7,0,2"/>
                                                 <TextBlock Text="{Binding Total, StringFormat=C2}" FontSize="15" FontWeight="SemiBold" Foreground="#17233B" HorizontalAlignment="Center"/>
+                                                <TextBlock Text="{Binding CustomerLabel}" TextTrimming="CharacterEllipsis" MaxWidth="165" FontSize="11" Foreground="#17233B" Margin="0,5,0,0"/>
+                                                <TextBlock Text="{Binding EmployeeLabel}" TextTrimming="CharacterEllipsis" MaxWidth="165" FontSize="11" Foreground="#52627A"/>
                                             </StackPanel>
                                         </Button>
                                     </DataTemplate>
@@ -121,11 +147,22 @@
                 <Grid x:Name="MenuPage" Visibility="Collapsed">
                     <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
                     <DockPanel Margin="0,0,0,12">
-                        <StackPanel><TextBlock Text="Cardápio do restaurante" FontSize="22" FontWeight="Bold"/><TextBlock Text="Clique duas vezes em nome, categoria ou preço para editar diretamente na lista." Foreground="#748198" Margin="0,4,0,0"/></StackPanel>
+                        <StackPanel><TextBlock Text="Edite os preços M/G e o destino: kitchen (cozinha) ou bar (balcão)." Foreground="#748198" Margin="0,4,0,0"/></StackPanel>
                         <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
-                            <Button Content="＋ Novo item" Background="#17233B" Foreground="White" Margin="0,0,8,0" Padding="12,7" Click="NewMenuItem_Click"/>
-                            <Button Content="Editar item" Margin="0,0,8,0" Padding="12,7" Click="EditMenuItem_Click"/>
-                            <Button x:Name="ToggleMenuButton" Content="Desativar item" Padding="12,7" Click="ToggleMenuItem_Click"/>
+                            <Button Content="Cardápio pesqueiro" Margin="0,0,8,0" Padding="12,7" Click="ReplacePesqueiroMenu_Click"/>
+                            <Button Content="Atualizar descrições" Margin="0,0,8,0" Padding="12,7" Click="UpdatePesqueiroDescriptions_Click"/>
+                            <Button ToolTip="Novo item" Background="#17233B" Foreground="White" Margin="0,0,8,0" Padding="12,7" Click="NewMenuItem_Click">
+                                <TextBlock Text="＋" FontSize="16" FontWeight="Bold"/>
+                            </Button>
+                            <Button ToolTip="Editar item" Margin="0,0,8,0" Padding="12,7" Click="EditMenuItem_Click">
+                                <TextBlock Text="✏️" FontSize="14"/>
+                            </Button>
+                            <Button ToolTip="Variações" Margin="0,0,8,0" Padding="12,7" Click="EditMenuOptions_Click">
+                                <TextBlock Text="⚙️" FontSize="14"/>
+                            </Button>
+                            <Button x:Name="ToggleMenuButton" ToolTip="Ativar/Desativar item" Padding="12,7" Click="ToggleMenuItem_Click">
+                                <TextBlock Text="⏻" FontSize="14"/>
+                            </Button>
                         </StackPanel>
                     </DockPanel>
                     <DataGrid x:Name="MenuGrid" Grid.Row="1" IsReadOnly="False" AutoGenerateColumns="False"
@@ -133,8 +170,12 @@
                               RowEditEnding="MenuGrid_RowEditEnding">
                         <DataGrid.Columns>
                             <DataGridTextColumn Header="ITEM" Binding="{Binding Name, UpdateSourceTrigger=PropertyChanged}" Width="*"/>
+                            <DataGridTextColumn Header="DESCRIÇÃO" Binding="{Binding Description, UpdateSourceTrigger=PropertyChanged}" Width="250"/>
                             <DataGridTextColumn Header="CATEGORIA" Binding="{Binding Category, UpdateSourceTrigger=PropertyChanged}" Width="200"/>
                             <DataGridTextColumn Header="PREÇO (R$)" Binding="{Binding Price, StringFormat=N2, UpdateSourceTrigger=PropertyChanged}" Width="150"/>
+                            <DataGridTextColumn Header="M (R$)" Binding="{Binding PriceM, UpdateSourceTrigger=PropertyChanged}" Width="100"/>
+                            <DataGridTextColumn Header="G (R$)" Binding="{Binding PriceG, UpdateSourceTrigger=PropertyChanged}" Width="100"/>
+                            <DataGridTextColumn Header="DESTINO" Binding="{Binding PrintTarget, UpdateSourceTrigger=PropertyChanged}" Width="100"/>
                             <DataGridTextColumn Header="STATUS" Binding="{Binding StatusLabel}" IsReadOnly="True" Width="120"/>
                         </DataGrid.Columns>
                     </DataGrid>
@@ -142,11 +183,17 @@
                 <Grid x:Name="EmployeesPage" Visibility="Collapsed">
                     <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
                     <DockPanel Margin="0,0,0,12">
-                        <StackPanel><TextBlock Text="Funcionários e garçons" FontSize="22" FontWeight="Bold"/><TextBlock Text="Cadastre o acesso do webapp com número, senha inicial e áreas permitidas." Foreground="#748198" Margin="0,4,0,0"/></StackPanel>
+                        <StackPanel><TextBlock Text="Cadastre o acesso do webapp com número, senha inicial e áreas permitidas." Foreground="#748198" Margin="0,4,0,0"/></StackPanel>
                         <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
-                            <Button Content="＋ Novo funcionário" Background="#17233B" Foreground="White" Margin="0,0,8,0" Padding="12,7" Click="NewEmployee_Click"/>
-                            <Button Content="Editar" Margin="0,0,8,0" Padding="12,7" Click="EditEmployee_Click"/>
-                            <Button x:Name="ToggleEmployeeButton" Content="Desativar" Padding="12,7" Click="ToggleEmployee_Click"/>
+                            <Button ToolTip="Novo funcionário" Background="#17233B" Foreground="White" Margin="0,0,8,0" Padding="12,7" Click="NewEmployee_Click">
+                                <TextBlock Text="＋" FontSize="16" FontWeight="Bold"/>
+                            </Button>
+                            <Button ToolTip="Editar" Margin="0,0,8,0" Padding="12,7" Click="EditEmployee_Click">
+                                <TextBlock Text="✏️" FontSize="14"/>
+                            </Button>
+                            <Button x:Name="ToggleEmployeeButton" ToolTip="Ativar/Desativar" Padding="12,7" Click="ToggleEmployee_Click">
+                                <TextBlock Text="⏻" FontSize="14"/>
+                            </Button>
                         </StackPanel>
                     </DockPanel>
                     <DataGrid x:Name="EmployeesGrid" Grid.Row="1" IsReadOnly="True" AutoGenerateColumns="False" SelectionChanged="EmployeesGrid_SelectionChanged">
@@ -160,7 +207,8 @@
                     </DataGrid>
                 </Grid>
                 <Grid x:Name="CashPage" Visibility="Collapsed">
-                    <StackPanel>
+                    <ScrollViewer VerticalScrollBarVisibility="Auto">
+                    <StackPanel Margin="0,0,8,0">
                         <TextBlock Text="Caixa" FontSize="22" FontWeight="Bold" Foreground="#17233B"/>
                         <TextBlock Text="Abra o caixa no início do turno e informe o valor contado para encerrá-lo." Foreground="#748198" Margin="0,4,0,16"/>
                         <Border Background="White" CornerRadius="12" BorderBrush="#E8EDF3" BorderThickness="1" Padding="22">
@@ -175,7 +223,147 @@
                                 </StackPanel>
                             </StackPanel>
                         </Border>
+                        <Border x:Name="DashboardPanel" Visibility="Collapsed" Background="White" CornerRadius="12" BorderBrush="#E8EDF3" BorderThickness="1" Padding="22" Margin="0,16,0,0">
+                            <StackPanel>
+                                <TextBlock Text="Dashboard de recebimentos" FontSize="17" FontWeight="Bold"                                 Foreground="#17233B"/>
+                                <StackPanel Orientation="Horizontal" Margin="0,12,0,0">
+                                    <TextBlock Text="De" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                                    <DatePicker x:Name="DashboardFromPicker" Width="140"/>
+                                    <TextBlock Text="Até" VerticalAlignment="Center" Margin="16,0,8,0"/>
+                                    <DatePicker x:Name="DashboardToPicker" Width="140"/>
+                                    <Button Content="Aplicar" Background="#17233B" Foreground="White" Padding="14,6" Margin="16,0,0,0" Click="ApplyDashboard_Click"/>
+                                    <Button Content="Hoje" Padding="12,6" Margin="8,0,0,0" Tag="0" Click="DashboardPreset_Click"/>
+                                    <Button Content="7 dias" Padding="12,6" Margin="8,0,0,0" Tag="6" Click="DashboardPreset_Click"/>
+                                    <Button Content="30 dias" Padding="12,6" Margin="8,0,0,0" Tag="29" Click="DashboardPreset_Click"/>
+                                    <Button x:Name="ExportCsvButton" Content="Exportar CSV" Padding="12,6" Margin="8,0,0,0" Visibility="Collapsed" Click="ExportCsv_Click"/>
+                                </StackPanel>
+                                <UniformGrid Columns="5" Margin="0,16,0,0">
+                                    <StackPanel Margin="0,0,8,0">
+                                        <TextBlock Text="Faturamento" Foreground="#748198"/>
+                                        <TextBlock x:Name="DashboardRevenueText" FontSize="20" FontWeight="Bold" Text="R$ 0,00"/>
+                                    </StackPanel>
+                                    <StackPanel Margin="0,0,8,0">
+                                        <TextBlock Text="Comandas pagas" Foreground="#748198"/>
+                                        <TextBlock x:Name="DashboardOrdersText" FontSize="20" FontWeight="Bold" Text="0"/>
+                                    </StackPanel>
+                                    <StackPanel Margin="0,0,8,0">
+                                        <TextBlock Text="Ticket médio" Foreground="#748198"/>
+                                        <TextBlock x:Name="DashboardTicketText" FontSize="20" FontWeight="Bold" Text="R$ 0,00"/>
+                                    </StackPanel>
+                                    <StackPanel x:Name="DashboardExpensesKpi" Margin="0,0,8,0" Visibility="Collapsed">
+                                        <TextBlock Text="Gastos" Foreground="#748198"/>
+                                        <TextBlock x:Name="DashboardExpensesText" FontSize="20" FontWeight="Bold" Foreground="#B42318" Text="R$ 0,00"/>
+                                    </StackPanel>
+                                    <StackPanel x:Name="DashboardResultKpi" Visibility="Collapsed">
+                                        <TextBlock Text="Resultado" Foreground="#748198"/>
+                                        <TextBlock x:Name="DashboardResultText" FontSize="20" FontWeight="Bold" Text="R$ 0,00"/>
+                                    </StackPanel>
+                                </UniformGrid>
+                                <TextBlock Text="Faturamento por dia" FontWeight="SemiBold" Margin="0,18,0,6"/>
+                                <ItemsControl x:Name="DashboardDaysList">
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate>
+                                            <Grid Margin="0,2">
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="90"/>
+                                                    <ColumnDefinition Width="*"/>
+                                                    <ColumnDefinition Width="110"/>
+                                                </Grid.ColumnDefinitions>
+                                                <TextBlock Text="{Binding Label}" VerticalAlignment="Center"/>
+                                                <ProgressBar Grid.Column="1" Height="14" Minimum="0" Maximum="100" Value="{Binding Percent, Mode=OneWay}" Foreground="#2563EB" Margin="6,0"/>
+                                                <TextBlock Grid.Column="2" Text="{Binding TotalText}" HorizontalAlignment="Right" VerticalAlignment="Center"/>
+                                            </Grid>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                                <TextBlock Text="Por forma de pagamento" FontWeight="SemiBold" Margin="0,18,0,6"/>
+                                <ItemsControl x:Name="DashboardMethodsList">
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate>
+                                            <Grid Margin="0,2">
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="160"/>
+                                                    <ColumnDefinition Width="*"/>
+                                                    <ColumnDefinition Width="110"/>
+                                                </Grid.ColumnDefinitions>
+                                                <TextBlock Text="{Binding Label}" VerticalAlignment="Center"/>
+                                                <ProgressBar Grid.Column="1" Height="14" Minimum="0" Maximum="100" Value="{Binding Percent, Mode=OneWay}" Foreground="#16A34A" Margin="6,0"/>
+                                                <TextBlock Grid.Column="2" Text="{Binding TotalText}" HorizontalAlignment="Right" VerticalAlignment="Center"/>
+                                            </Grid>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                                <StackPanel x:Name="DashboardWaiterPanel" Visibility="Collapsed">
+                                    <TextBlock x:Name="DashboardWaiterTitle" Text="Vendas por garçom" FontWeight="SemiBold" Margin="0,18,0,6"/>
+                                    <ItemsControl x:Name="DashboardWaitersList">
+                                        <ItemsControl.ItemTemplate>
+                                            <DataTemplate>
+                                                <Grid Margin="0,2">
+                                                    <Grid.ColumnDefinitions>
+                                                        <ColumnDefinition Width="280"/>
+                                                        <ColumnDefinition Width="*"/>
+                                                        <ColumnDefinition Width="110"/>
+                                                    </Grid.ColumnDefinitions>
+                                                    <TextBlock Text="{Binding Label}" VerticalAlignment="Center"/>
+                                                    <ProgressBar Grid.Column="1" Height="14" Minimum="0" Maximum="100" Value="{Binding Percent, Mode=OneWay}" Foreground="#7C3AED" Margin="6,0"/>
+                                                    <TextBlock Grid.Column="2" Text="{Binding TotalText}" HorizontalAlignment="Right" VerticalAlignment="Center"/>
+                                                </Grid>
+                                            </DataTemplate>
+                                        </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+                                    <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+                                        <TextBlock Text="Comissão (%)" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                                        <TextBox x:Name="CommissionBox" Width="60" Text="10" LostFocus="CommissionBox_LostFocus"/>
+                                    </StackPanel>
+                                </StackPanel>
+                                <StackPanel x:Name="DashboardExpenseCategoriesPanel" Visibility="Collapsed">
+                                    <TextBlock Text="Gastos por categoria" FontWeight="SemiBold" Margin="0,18,0,6"/>
+                                    <ItemsControl x:Name="DashboardCategoriesList">
+                                        <ItemsControl.ItemTemplate>
+                                            <DataTemplate>
+                                                <Grid Margin="0,2">
+                                                    <Grid.ColumnDefinitions>
+                                                        <ColumnDefinition Width="160"/>
+                                                        <ColumnDefinition Width="*"/>
+                                                        <ColumnDefinition Width="110"/>
+                                                    </Grid.ColumnDefinitions>
+                                                    <TextBlock Text="{Binding Label}" VerticalAlignment="Center"/>
+                                                    <ProgressBar Grid.Column="1" Height="14" Minimum="0" Maximum="100" Value="{Binding Percent, Mode=OneWay}" Foreground="#DC2626" Margin="6,0"/>
+                                                    <TextBlock Grid.Column="2" Text="{Binding TotalText}" HorizontalAlignment="Right" VerticalAlignment="Center"/>
+                                                </Grid>
+                                            </DataTemplate>
+                                        </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+                                </StackPanel>
+                            </StackPanel>
+                        </Border>
+                        <Border x:Name="LowStockPanel" Visibility="Collapsed" Background="White" CornerRadius="12" BorderBrush="#E8EDF3" BorderThickness="1" Padding="22" Margin="0,16,0,0">
+                            <StackPanel>
+                                <TextBlock Text="Estoque baixo" FontSize="17" FontWeight="Bold" Foreground="#B42318"/>
+                                <ItemsControl x:Name="LowStockList" Margin="0,8,0,0"/>
+                            </StackPanel>
+                        </Border>
+                        <Border x:Name="ExpensesPanel" Visibility="Collapsed" Background="White" CornerRadius="12" BorderBrush="#E8EDF3" BorderThickness="1" Padding="22" Margin="0,16,0,0">
+                            <StackPanel>
+                                <TextBlock Text="Gastos" FontSize="17" FontWeight="Bold" Foreground="#17233B"/>
+                                <TextBlock Text="Registre despesas como fornecedores, gás, aluguel e salários. Gastos pagos em dinheiro do caixa reduzem o dinheiro esperado. A lista segue o período escolhido no dashboard." TextWrapping="Wrap" Foreground="#748198" Margin="0,6,0,12"/>
+                                <StackPanel Orientation="Horizontal" Margin="0,0,0,10">
+                                    <Button Content="＋ Registrar gasto" Background="#17233B" Foreground="White" Padding="14,8" Click="AddExpense_Click"/>
+                                    <Button Content="Excluir selecionado" Padding="12,8" Margin="8,0,0,0" Click="DeleteExpense_Click"/>
+                                </StackPanel>
+                                <DataGrid x:Name="ExpensesGrid" Height="220" IsReadOnly="True" AutoGenerateColumns="False" SelectionMode="Single">
+                                    <DataGrid.Columns>
+                                        <DataGridTextColumn Header="DATA" Binding="{Binding CreatedAt, StringFormat={}{0:dd/MM/yyyy HH:mm}}" Width="140"/>
+                                        <DataGridTextColumn Header="CATEGORIA" Binding="{Binding Category}" Width="150"/>
+                                        <DataGridTextColumn Header="DESCRIÇÃO" Binding="{Binding Description}" Width="*"/>
+                                        <DataGridTextColumn Header="VALOR" Binding="{Binding Amount, StringFormat=C2}" Width="110"/>
+                                        <DataGridCheckBoxColumn Header="DO CAIXA" Binding="{Binding PaidFromCash, Mode=OneWay}" Width="90"/>
+                                    </DataGrid.Columns>
+                                </DataGrid>
+                            </StackPanel>
+                        </Border>
                     </StackPanel>
+                    </ScrollViewer>
                 </Grid>
                 <Grid x:Name="SettingsPage" Visibility="Collapsed">
                     <ScrollViewer VerticalScrollBarVisibility="Auto">
@@ -199,12 +387,56 @@
                                 </StackPanel>
                             </StackPanel>
                         </Border>
+                        <Border Background="White" CornerRadius="12" BorderBrush="#E8EDF3" BorderThickness="1" Padding="22" Margin="0,14,0,0">
+                            <StackPanel>
+                                <TextBlock Text="Impressoras" FontSize="17" FontWeight="Bold"/>
+                                <TextBlock Text="Configure qual impressora recebe cada tipo de pedido. A cozinha recebe comidas; o bar recebe bebidas. Para impressora de rede sem driver, digite o IP e porta (ex.: 192.168.0.50:9100)." TextWrapping="Wrap" Foreground="#748198" Margin="0,6,0,10"/>
+                                <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                                    <TextBlock Text="Cozinha:" VerticalAlignment="Center" Width="70"/>
+                                    <ComboBox x:Name="KitchenPrinterCombo" Width="250" Padding="8" IsEditable="True" VerticalContentAlignment="Center"/>
+                                </StackPanel>
+                                <StackPanel Orientation="Horizontal">
+                                    <TextBlock Text="Bar/Bebidas:" VerticalAlignment="Center" Width="70"/>
+                                    <ComboBox x:Name="BarPrinterCombo" Width="250" Padding="8" IsEditable="True" VerticalContentAlignment="Center"/>
+                                    <Button Content="↻ Atualizar lista" Margin="8,0,0,0" Padding="12,8" VerticalContentAlignment="Center" Click="RefreshPrinters_Click"/>
+                                </StackPanel>
+                                <Button Content="Salvar impressoras" Background="#17233B" Foreground="White" Margin="0,12,0,0" Padding="12,8" HorizontalAlignment="Left" Click="SavePrinters_Click"/>
+                            </StackPanel>
+                        </Border>
+                        <Border Background="White" CornerRadius="12" BorderBrush="#E8EDF3" BorderThickness="1" Padding="22" Margin="0,14,0,0">
+                            <StackPanel>
+                                <TextBlock Text="Servidor local (garçons no celular)" FontSize="17" FontWeight="Bold"/>
+                                <TextBlock Text="Permite que os garçons enviem comandas pelo celular conectado ao Wi-Fi da loja, mesmo sem internet. Este computador precisa estar com o SYSMR aberto. O PIN local de cada garçom é definido no cadastro do funcionário." TextWrapping="Wrap" Foreground="#748198" Margin="0,6,0,10"/>
+                                <CheckBox x:Name="LocalServerEnabledCheck" Content="Ativar servidor local para os garçons"/>
+                                <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
+                                    <TextBlock Text="Porta:" VerticalAlignment="Center" Width="46"/>
+                                    <TextBox x:Name="LocalServerPortBox" Width="90" Padding="8,6" Text="8080" VerticalContentAlignment="Center"/>
+                                    <Button Content="Salvar e aplicar" Margin="12,0,0,0" Padding="12,8" Background="#17233B" Foreground="White" VerticalContentAlignment="Center" Click="SaveLocalServer_Click"/>
+                                </StackPanel>
+                                <TextBlock x:Name="LocalServerStatusText" Text="Servidor desativado." TextWrapping="Wrap" Foreground="#B54708" Margin="0,12,0,0"/>
+                                <TextBlock x:Name="LocalServerUrlText" TextWrapping="Wrap" Foreground="#17233B" FontWeight="SemiBold" Margin="0,4,0,0"/>
+                                <Button x:Name="FirewallButton" Content="Liberar porta no Firewall do Windows" HorizontalAlignment="Left" Margin="0,12,0,0" Padding="12,8" Click="Firewall_Click"/>
+                                <Button x:Name="PrintQrButton" Content="🖨 Imprimir QR Code para os garçons" HorizontalAlignment="Left" Margin="0,8,0,0" Padding="12,8" Click="PrintQr_Click"/>
+                                <TextBlock Text="No celular do garçom: conecte ao Wi-Fi da loja e abra o endereço exibido acima. Dica: gere um QR Code com o endereço e deixe impresso no balcão." TextWrapping="Wrap" Foreground="#748198" Margin="0,10,0,0"/>
+                            </StackPanel>
+                        </Border>
                         <Border x:Name="AdminToolsPanel" Visibility="Collapsed" Background="White" CornerRadius="12" BorderBrush="#E8EDF3" BorderThickness="1" Padding="22" Margin="0,14,0,0">
                             <StackPanel>
                                 <TextBlock Text="Formato da loja" FontSize="17" FontWeight="Bold"/>
                                 <TextBlock Text="Alterne entre Restaurante e Lojista / PDV. O SYSMR será fechado para carregar o novo formato." TextWrapping="Wrap" Foreground="#748198" Margin="0,6,0,10"/>
                                 <CheckBox x:Name="RestaurantFormatToggle" Content="Esta loja usa o formato Restaurante" IsChecked="True" Click="RestaurantFormatToggle_Click"/>
                                 <TextBlock Text="A troca exige conexão com Firebase e fila de sincronização vazia." Foreground="#B54708" TextWrapping="Wrap" Margin="0,8,0,0"/>
+                                <Separator Margin="0,18,0,14"/>
+                                <TextBlock Text="Recursos habilitados para esta loja" FontSize="17" FontWeight="Bold"/>
+                                <TextBlock Text="Somente o Super Admin liga ou desliga. Recursos desligados ficam ocultos para os usuários da loja." TextWrapping="Wrap" Foreground="#748198" Margin="0,6,0,10"/>
+                                <CheckBox x:Name="FeatureDashboardCheck" Content="Dashboard de recebimentos (aba Caixa)" Click="Feature_Click"/>
+                                <CheckBox x:Name="FeatureExpensesCheck" Content="Controle de gastos (aba Caixa)" Margin="0,8,0,0" Click="Feature_Click"/>
+                                <CheckBox x:Name="FeatureWaiterReportCheck" Content="Relatório e comissão por garçom (dashboard)" Margin="0,8,0,0" Click="Feature_Click"/>
+                                <CheckBox x:Name="FeatureCsvCheck" Content="Exportar dashboard para CSV" Margin="0,8,0,0" Click="Feature_Click"/>
+                                <CheckBox x:Name="FeatureLowStockCheck" Content="Alerta de estoque baixo (aba Caixa)" Margin="0,8,0,0" Click="Feature_Click"/>
+                                <CheckBox x:Name="FeatureBlindCloseCheck" Content="Fechamento cego (oculta o dinheiro esperado)" Margin="0,8,0,0" Click="Feature_Click"/>
+                                <CheckBox x:Name="FeatureKitchenPrintCheck" Content="Imprimir na cozinha automaticamente ao lançar item" Margin="0,8,0,0" Click="Feature_Click"/>
+                                <CheckBox x:Name="FeatureServiceChargeCheck" Content="Taxa de serviço de 10% do garçom" Margin="0,8,0,0" Click="Feature_Click"/>
                                 <Separator Margin="0,18,0,14"/>
                                 <TextBlock Text="Modelos de cardápio" FontSize="17" FontWeight="Bold"/>
                                 <TextBlock Text="Escolha um tipo de restaurante. Os itens existentes não serão duplicados; revise os preços sugeridos antes de vender." TextWrapping="Wrap" Foreground="#748198" Margin="0,6,0,10"/>
@@ -232,7 +464,7 @@
                     </ScrollViewer>
                 </Grid>
             </Grid>
-            <TextBlock x:Name="FooterStatus" Grid.Row="2" Text="Pronto" Foreground="#748198" VerticalAlignment="Center"/>
+            <TextBlock x:Name="FooterStatus" Grid.Row="3" Text="Pronto" Foreground="#748198" VerticalAlignment="Center"/>
         </Grid>
     </Grid>
 </Window>

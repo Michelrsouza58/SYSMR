@@ -21,9 +21,12 @@ public sealed class FirebaseStoreAccountClient(SqliteAccessControl settings)
         string superAdminEmail,
         string superAdminPassword,
         string storeType = "sales",
+        string? contactEmail = null,
         CancellationToken cancellationToken = default)
     {
         ValidateAccount(customerNumber, customerName, password);
+        if (contactEmail is not null && !IsValidEmail(contactEmail))
+            throw new ArgumentException("Informe um e-mail de contato válido ou deixe em branco.", nameof(contactEmail));
         var config = await GetConfigurationAsync(cancellationToken);
         var normalizedNumber = SqliteStoreAccountRepository.NormalizeNumber(customerNumber);
         var normalizedName = customerName.Trim();
@@ -42,7 +45,8 @@ public sealed class FirebaseStoreAccountClient(SqliteAccessControl settings)
                 customerNumber = normalizedNumber,
                 customerName = normalizedName,
                 password,
-                storeType
+                storeType,
+                contactEmail = string.IsNullOrWhiteSpace(contactEmail) ? null : contactEmail.Trim()
             }, options: JsonOptions)
         };
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", adminToken.IdToken);
@@ -70,7 +74,9 @@ public sealed class FirebaseStoreAccountClient(SqliteAccessControl settings)
 
         var config = await GetConfigurationAsync(cancellationToken);
         var normalizedNumber = SqliteStoreAccountRepository.NormalizeNumber(customerNumber);
-        var token = await SignInWithEmailAsync(config.ApiKey, CreateLoginEmail(normalizedNumber), password, cancellationToken);
+        var loginEmail = await ResolveLoginEmailAsync(config, normalizedNumber, customerName, cancellationToken)
+                         ?? CreateLoginEmail(normalizedNumber);
+        var token = await SignInWithEmailAsync(config.ApiKey, loginEmail, password, cancellationToken);
         var profile = await ReadProfileAsync(config.DatabaseUrl, token, cancellationToken);
         if (!profile.CustomerNumber.Equals(normalizedNumber, StringComparison.OrdinalIgnoreCase) ||
             !profile.CustomerName.Equals(customerName.Trim(), StringComparison.OrdinalIgnoreCase))
@@ -142,30 +148,7 @@ public sealed class FirebaseStoreAccountClient(SqliteAccessControl settings)
         ArgumentException.ThrowIfNullOrWhiteSpace(firebaseUid);
         ArgumentNullException.ThrowIfNull(menuItems);
 
-        var categories = menuItems
-            .Select(item => NormalizeMenuCategory(item.Category))
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToDictionary(
-                CreateMenuCategoryId,
-                category => new { id = CreateMenuCategoryId(category), name = category },
-                StringComparer.Ordinal);
-        var items = menuItems.ToDictionary(
-            item => item.Id.ToString(),
-            item => new
-            {
-                id = item.Id,
-                name = item.Name,
-                categoryId = CreateMenuCategoryId(NormalizeMenuCategory(item.Category)),
-                price = item.Price,
-                isActive = item.IsActive
-            });
-        var menu = new
-        {
-            schemaVersion = 1,
-            updatedAt = DateTimeOffset.UtcNow,
-            categories,
-            items
-        };
+        var menu = CreateRestaurantMenuProjection(menuItems);
 
         var session = await RefreshSessionAsync(firebaseUid, refreshToken, cancellationToken);
         var endpoint = $"{session.DatabaseUrl}/clients/{Uri.EscapeDataString(firebaseUid)}/branches/restaurant/restaurantLive/menu.json?auth={Uri.EscapeDataString(session.IdToken)}";
@@ -178,6 +161,49 @@ public sealed class FirebaseStoreAccountClient(SqliteAccessControl settings)
                 null,
                 response.StatusCode);
         return session.RefreshToken;
+    }
+
+    public static object CreateRestaurantMenuProjection(IReadOnlyList<RestaurantMenuItemRecord> menuItems)
+    {
+        ArgumentNullException.ThrowIfNull(menuItems);
+        var categories = menuItems
+            .Select(item => NormalizeMenuCategory(item.Category))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(
+                CreateMenuCategoryId,
+                category => new { id = CreateMenuCategoryId(category), name = category },
+                StringComparer.Ordinal);
+        var items = menuItems.ToDictionary(
+            item => item.Id.ToString(),
+            item =>
+            {
+                var published = new Dictionary<string, object>
+                {
+                    ["id"] = item.Id,
+                    ["name"] = item.Name,
+                    ["description"] = item.Description,
+                    ["categoryId"] = CreateMenuCategoryId(NormalizeMenuCategory(item.Category)),
+                    ["price"] = item.Price,
+                    ["isActive"] = item.IsActive,
+                    ["options"] = (item.Options ?? []).ToDictionary(
+                    option => option.Id.ToString(),
+                    option => new { id = option.Id, name = option.Name, extraPrice = option.ExtraPrice })
+                };
+                var sizes = new Dictionary<string, decimal>();
+                if (item.PriceM is decimal priceM) sizes["M"] = priceM;
+                if (item.PriceG is decimal priceG) sizes["G"] = priceG;
+                if (sizes.Count > 0) published["sizes"] = sizes;
+                return published;
+            });
+        return new
+        {
+            schemaVersion = 2,
+            updatedAt = DateTimeOffset.UtcNow,
+            capabilities = new { submitOrder = true },
+            categories,
+            items
+        };
+
     }
 
     public async Task<string> UploadRestaurantAreasAsync(
@@ -213,11 +239,13 @@ public sealed class FirebaseStoreAccountClient(SqliteAccessControl settings)
                                     id = order.Id,
                                     openedAt = order.OpenedAt,
                                     employeeName = order.EmployeeName,
+                                    customerName = order.CustomerName,
                                     items = order.Items.Select(item => new
                                     {
                                         id = item.Id,
                                         name = item.Name,
                                         quantity = item.Quantity,
+                                        paidQuantity = item.PaidQuantity,
                                         unitPrice = item.UnitPrice,
                                         observation = item.Observation
                                     }),
@@ -226,6 +254,7 @@ public sealed class FirebaseStoreAccountClient(SqliteAccessControl settings)
                                     waiterServiceCharge = order.WaiterServiceCharge,
                                     total = order.Total,
                                     paidTotal = order.PaidTotal,
+                                    hasUnallocatedPayments = order.HasUnallocatedPayments,
                                     remainingTotal = order.RemainingTotal
                                 }
                         };
@@ -497,6 +526,188 @@ public sealed class FirebaseStoreAccountClient(SqliteAccessControl settings)
         return $"store-{Convert.ToHexString(digest).ToLowerInvariant()}@accounts.sysmr.app";
     }
 
+    /// <summary>Deriva a URL de uma função irmã a partir da URL de provisionamento configurada.</summary>
+    public static string DeriveFunctionUrl(string provisioningUrl, string functionName)
+    {
+        if (!Uri.TryCreate(provisioningUrl, UriKind.Absolute, out var uri) ||
+            uri.Scheme != Uri.UriSchemeHttps)
+            throw new InvalidOperationException("Configure a URL HTTPS da função de provisionamento do Firebase.");
+        
+        // Extrai o projeto e região da URL do Cloud Run ou usa o padrão do Firebase
+        var host = uri.Host;
+        if (host.EndsWith(".run.app"))
+        {
+            // Formato: https://functionname-hash-uc.a.run.app
+            // Extrai o hash e região
+            var parts = host.Split('-');
+            if (parts.Length >= 3)
+            {
+                var hashAndRegion = string.Join("-", parts.Skip(1));
+                return $"https://{functionName.ToLowerInvariant()}-{hashAndRegion}";
+            }
+        }
+        
+        // Fallback: usa o padrão do Firebase Cloud Functions
+        var projectId = host.Split('.')[0];
+        if (host.Contains("cloudfunctions.net"))
+        {
+            var region = host.Split('.')[0].Split('-')[0];
+            return $"https://{region}-{projectId}.cloudfunctions.net/{functionName}";
+        }
+        
+        // Último fallback: assume que é o padrão us-central1
+        return $"https://us-central1-sysmr-2541c.cloudfunctions.net/{functionName}";
+    }
+
+    /// <summary>
+    /// Envia o e-mail de redefinição de senha do Firebase para o e-mail de contato
+    /// cadastrado na loja. Exige número e nome da loja.
+    /// </summary>
+    public async Task SendPasswordResetAsync(
+        string customerNumber,
+        string customerName,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(customerNumber) || string.IsNullOrWhiteSpace(customerName))
+            throw new ArgumentException("Informe o número e o nome da loja para recuperar a senha.");
+        var config = await GetConfigurationAsync(cancellationToken);
+        var normalizedNumber = SqliteStoreAccountRepository.NormalizeNumber(customerNumber);
+        var resolved = await ResolveLoginAsync(config, normalizedNumber, customerName, cancellationToken)
+            ?? throw new InvalidOperationException(
+                "Não foi possível localizar a loja. Confira o número e o nome, ou atualize as funções do Firebase.");
+        if (!resolved.HasContactEmail)
+            throw new InvalidOperationException(
+                "Esta loja ainda não tem um e-mail de contato cadastrado. Peça ao Super Admin para cadastrar em \"E-mail da loja\" na tela de acesso.");
+
+        using var response = await Http.PostAsJsonAsync(
+            $"https://identitytoolkit.googleapis.com/v1/accounts:sendOobCode?key={Uri.EscapeDataString(config.ApiKey)}",
+            new { requestType = "PASSWORD_RESET", email = resolved.Email },
+            JsonOptions,
+            cancellationToken);
+        var body = await response.Content.ReadAsStringAsync(cancellationToken);
+        if (!response.IsSuccessStatusCode)
+            throw FirebaseAccountRequestException.FromResponse(response.StatusCode, body);
+    }
+
+    /// <summary>
+    /// Define o e-mail de contato da loja usando o PIN local do Super Admin.
+    /// Não requer as credenciais globais do Firebase.
+    /// </summary>
+    public async Task SetStoreContactEmailByUidAsync(
+        string storeUid,
+        string? contactEmail,
+        string localPin,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(storeUid))
+            throw new ArgumentException("Informe o UID da loja.", nameof(storeUid));
+        if (!string.IsNullOrWhiteSpace(contactEmail) && !IsValidEmail(contactEmail))
+            throw new ArgumentException("Informe um e-mail de contato válido ou deixe em branco para remover.", nameof(contactEmail));
+        if (string.IsNullOrEmpty(localPin))
+            throw new ArgumentException("Informe o PIN do Super Admin local.", nameof(localPin));
+
+        var config = await GetConfigurationAsync(cancellationToken);
+        using var request = new HttpRequestMessage(
+            HttpMethod.Post,
+            DeriveFunctionUrl(config.ProvisioningUrl, "setStoreContactEmailByUid"))
+        {
+            Content = JsonContent.Create(new
+            {
+                storeUid,
+                contactEmail = string.IsNullOrWhiteSpace(contactEmail) ? null : contactEmail.Trim(),
+                localPin
+            }, options: JsonOptions)
+        };
+        using var response = await Http.SendAsync(request, cancellationToken);
+        var body = await response.Content.ReadAsStringAsync(cancellationToken);
+        if (!response.IsSuccessStatusCode)
+            throw FirebaseAccountRequestException.FromResponse(response.StatusCode, body);
+    }
+
+    /// <summary>
+    /// Cadastra, altera ou remove (vazio) o e-mail de contato da loja. O e-mail passa a
+    /// ser o identificador de login e o destino da recuperação de senha.
+    /// </summary>
+    public async Task UpdateStoreContactEmailAsync(
+        string customerNumber,
+        string? contactEmail,
+        string superAdminEmail,
+        string superAdminPassword,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(customerNumber))
+            throw new ArgumentException("Informe o número da loja.", nameof(customerNumber));
+        if (!string.IsNullOrWhiteSpace(contactEmail) && !IsValidEmail(contactEmail))
+            throw new ArgumentException("Informe um e-mail de contato válido ou deixe em branco para remover.", nameof(contactEmail));
+        if (string.IsNullOrWhiteSpace(superAdminEmail) || string.IsNullOrEmpty(superAdminPassword))
+            throw new ArgumentException("Informe as credenciais Firebase do Super Admin.");
+        var config = await GetConfigurationAsync(cancellationToken);
+        var adminToken = await SignInWithEmailAsync(config.ApiKey, superAdminEmail.Trim(), superAdminPassword, cancellationToken);
+        using var request = new HttpRequestMessage(
+            HttpMethod.Post,
+            DeriveFunctionUrl(config.ProvisioningUrl, "updateStoreContactEmail"))
+        {
+            Content = JsonContent.Create(new
+            {
+                customerNumber = SqliteStoreAccountRepository.NormalizeNumber(customerNumber),
+                contactEmail = string.IsNullOrWhiteSpace(contactEmail) ? null : contactEmail.Trim()
+            }, options: JsonOptions)
+        };
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", adminToken.IdToken);
+        using var response = await Http.SendAsync(request, cancellationToken);
+        var body = await response.Content.ReadAsStringAsync(cancellationToken);
+        if (!response.IsSuccessStatusCode)
+            throw FirebaseAccountRequestException.FromResponse(response.StatusCode, body);
+    }
+
+    private static bool IsValidEmail(string value)
+    {
+        var trimmed = value.Trim();
+        if (trimmed.Length > 254 || trimmed.Any(char.IsWhiteSpace))
+            return false;
+        var at = trimmed.IndexOf('@');
+        return at > 0 && at < trimmed.Length - 3 && trimmed.IndexOf('.', at + 2) > at + 1;
+    }
+
+    private async Task<string?> ResolveLoginEmailAsync(
+        FirebaseConfiguration config,
+        string normalizedNumber,
+        string customerName,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            return (await ResolveLoginAsync(config, normalizedNumber, customerName, cancellationToken))?.Email;
+        }
+        catch (Exception exception) when (exception is FirebaseAccountRequestException or HttpRequestException or InvalidOperationException)
+        {
+            // Função ainda não publicada ou loja sem e-mail de contato: usa o e-mail sintético.
+            return null;
+        }
+    }
+
+    private static async Task<ResolvedStoreLogin?> ResolveLoginAsync(
+        FirebaseConfiguration config,
+        string normalizedNumber,
+        string customerName,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(config.ProvisioningUrl))
+            return null;
+        using var response = await Http.PostAsJsonAsync(
+            DeriveFunctionUrl(config.ProvisioningUrl, "resolveStoreLogin"),
+            new { customerNumber = normalizedNumber, customerName = customerName.Trim() },
+            JsonOptions,
+            cancellationToken);
+        if (response.StatusCode == HttpStatusCode.NotFound)
+            return null;
+        var body = await response.Content.ReadAsStringAsync(cancellationToken);
+        if (!response.IsSuccessStatusCode)
+            throw FirebaseAccountRequestException.FromResponse(response.StatusCode, body);
+        var resolved = JsonSerializer.Deserialize<ResolvedStoreLogin>(body, JsonOptions);
+        return resolved is { Email.Length: > 0 } ? resolved : null;
+    }
+
     private async Task<FirebaseConfiguration> GetConfigurationAsync(CancellationToken cancellationToken)
     {
         var apiKey = await settings.GetSettingAsync("firebase.webApiKey", cancellationToken);
@@ -619,6 +830,7 @@ public sealed class FirebaseStoreAccountClient(SqliteAccessControl settings)
         [property: JsonPropertyName("refresh_token")] string RefreshToken);
     private sealed record ProvisionedAccount(string Uid);
     private sealed record StoreProfile(string CustomerNumber, string CustomerName, string? StoreType = null);
+    private sealed record ResolvedStoreLogin(string Email, bool HasContactEmail);
 }
 
 public sealed record FirebaseSession(string IdToken, string RefreshToken, string DatabaseUrl);

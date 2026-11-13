@@ -1,5 +1,6 @@
 using SYSMR.Application.Abstractions;
 using SYSMR.Application.Models;
+using SYSMR.Infrastructure;
 
 namespace SYSMR.Infrastructure.Persistence;
 
@@ -56,7 +57,7 @@ public sealed class FirebaseSyncWorker(
                                 await outbox.UpdateRefreshTokenAsync(refreshToken, cancellationToken);
 
                                 if (account.StoreType.Equals("restaurant", StringComparison.Ordinal) &&
-                                    syncEvent.Entity.Equals("menu-item", StringComparison.Ordinal))
+                                    syncEvent.Entity is "menu-item" or "menu-replaced")
                                 {
                                     menuProjectionAttempted = true;
                                     refreshToken = await firebase.UploadRestaurantMenuAsync(
@@ -83,7 +84,7 @@ public sealed class FirebaseSyncWorker(
                                 }
 
                                 if (account.StoreType.Equals("restaurant", StringComparison.Ordinal) &&
-                                    syncEvent.Entity is "order" or "order-item" or "order-item-removed" or "payment")
+                                    syncEvent.Entity is "order" or "order-item" or "order-item-removed" or "order-item-observation-updated" or "payment")
                                 {
                                     areaProjectionAttempted = true;
                                     refreshToken = await UploadRestaurantAreasAsync(
@@ -263,6 +264,7 @@ public sealed class FirebaseSyncWorker(
         if (string.IsNullOrWhiteSpace(refreshToken))
         {
             const string unavailable = "Sessão Firebase indisponível; comandos dos garçons não serão processados até um login online.";
+            DebugLog.Write($"[SyncWorker] {unavailable}");
             if (!commandFailures.TryGetValue("__session", out var previousSessionError) ||
                 !previousSessionError.Equals(unavailable, StringComparison.Ordinal))
             {
@@ -279,10 +281,12 @@ public sealed class FirebaseSyncWorker(
         (string RefreshToken, IReadOnlyList<WaiterCommandRecord> Commands) pending;
         try
         {
+            DebugLog.Write("[SyncWorker] Consultando comandos pendentes no Firebase...");
             pending = await firebase.GetPendingWaiterCommandsAsync(
                 account.FirebaseUid,
                 refreshToken,
                 cancellationToken);
+            DebugLog.Write($"[SyncWorker] {pending.Commands.Count} comando(s) pendente(s) encontrado(s).");
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -290,6 +294,7 @@ public sealed class FirebaseSyncWorker(
         }
         catch (Exception exception)
         {
+            DebugLog.Write($"[SyncWorker] ERRO ao consultar: {exception.Message}");
             if (!commandFailures.TryGetValue("__session", out var previousError) ||
                 !previousError.Equals(exception.Message, StringComparison.Ordinal))
             {
@@ -322,6 +327,8 @@ public sealed class FirebaseSyncWorker(
                 var result = await restaurant.ProcessWaiterCommandAsync(command, cancellationToken);
                 if (result.Status.Equals("applied", StringComparison.Ordinal))
                 {
+                    DebugLog.Write($"[SyncWorker] Comando do garçom {command.Id} aplicado; notificando UI.");
+                    RestaurantOrderNotifier.NotifyOrderChanged();
                     refreshToken = await UploadRestaurantAreasAsync(
                         account.FirebaseUid,
                         refreshToken,

@@ -23,11 +23,15 @@
                 <TextBlock Text="Número do garçom (login)" FontWeight="SemiBold" Margin="0,0,0,5"/>
                 <TextBox x:Name="NumberBox" Padding="9" Margin="0,0,0,12"/>
                 <StackPanel x:Name="PasswordPanel">
-                    <TextBlock Text="Senha inicial (mínimo 8 caracteres)" FontWeight="SemiBold" Margin="0,0,0,5"/>
+                    <TextBlock Text="Senha inicial web (mínimo 8 caracteres; opcional se informar PIN local)" FontWeight="SemiBold" Margin="0,0,0,5"/>
                     <PasswordBox x:Name="PasswordBox" Padding="9" Margin="0,0,0,12"/>
                     <TextBlock Text="Confirmar senha inicial" FontWeight="SemiBold" Margin="0,0,0,5"/>
                     <PasswordBox x:Name="ConfirmPasswordBox" Padding="9" Margin="0,0,0,12"/>
                 </StackPanel>
+                <TextBlock Text="PIN local (celular no Wi-Fi da loja)" FontWeight="SemiBold" Margin="0,0,0,5"/>
+                <TextBlock x:Name="LocalPinHint" Text="De 4 a 12 dígitos. Usado no app do garçom pela rede local, mesmo sem internet. Deixe em branco para manter o PIN atual."
+                           Foreground="#62718A" TextWrapping="Wrap" Margin="0,0,0,5"/>
+                <PasswordBox x:Name="LocalPinBox" Padding="9" Margin="0,0,0,12"/>
                 <TextBlock Text="Áreas permitidas no webapp" FontWeight="SemiBold" Margin="0,0,0,5"/>
                 <TextBlock Text="Selecione onde este garçom poderá consultar mesas e enviar pedidos."
                            Foreground="#62718A" TextWrapping="Wrap" Margin="0,0,0,8"/>

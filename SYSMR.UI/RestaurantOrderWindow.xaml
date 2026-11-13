@@ -15,23 +15,29 @@
             <StackPanel>
                 <TextBlock x:Name="TitleText" Text="Comanda" FontSize="24" FontWeight="Bold" Foreground="#17233B"/>
                 <TextBlock x:Name="StatusText" Text="Carregando comanda..." Foreground="#68778F" Margin="0,4,0,0"/>
+                <TextBlock x:Name="CustomerText" Foreground="#52627A" Margin="0,3,0,0"/>
             </StackPanel>
             <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
                 <TextBlock Text="Atendente" VerticalAlignment="Center" Margin="0,0,8,0"/>
                 <ComboBox x:Name="EmployeeCombo" Width="190" Padding="7" DisplayMemberPath="Name"/>
             </StackPanel>
         </DockPanel>
-        <DockPanel Grid.Row="1" Margin="0,16,0,12">
-            <TextBlock Text="Consumo da mesa" FontSize="16" FontWeight="Bold" VerticalAlignment="Center"/>
-            <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
-                <Button Content="Imprimir cozinha" Padding="10,8" Margin="0,0,8,0" Click="PrintKitchen_Click"/>
-                <ComboBox x:Name="MenuItemCombo" Width="280" Padding="8" DisplayMemberPath="Name"/>
+        <WrapPanel Grid.Row="1" Margin="0,16,0,12">
+                <ComboBox x:Name="PrintDestinationCombo" Width="105" SelectedIndex="0" Margin="0,0,4,0" ToolTip="Destino da cópia">
+                    <ComboBoxItem Content="Cozinha"/>
+                    <ComboBoxItem Content="Balcão"/>
+                </ComboBox>
+                <ComboBox x:Name="PrintScopeCombo" Width="125" SelectedIndex="0" Margin="0,0,4,0" ToolTip="Itens da cópia">
+                    <ComboBoxItem Content="Comanda toda"/>
+                    <ComboBoxItem Content="Selecionados"/>
+                </ComboBox>
+                <Button Content="Imprimir" Padding="8,8" Margin="0,0,8,0" Click="PrintOrder_Click"/>
+                <ComboBox x:Name="MenuItemCombo" Width="180" Padding="8" DisplayMemberPath="Name"/>
                 <TextBox x:Name="QuantityBox" Text="1" Width="65" Padding="8" Margin="8,0"/>
                 <TextBox x:Name="ObservationBox" Width="150" Padding="8" Margin="0,0,8,0"
                          ToolTip="Observação do item (opcional, até 250 caracteres)"/>
                 <Button Content="＋ Adicionar" Background="#17233B" Foreground="White" Click="AddItem_Click"/>
-            </StackPanel>
-        </DockPanel>
+        </WrapPanel>
         <Border Grid.Row="2" Background="White" CornerRadius="12" BorderBrush="#E8EDF3" BorderThickness="1" Padding="0">
             <DataGrid x:Name="ItemsGrid" IsReadOnly="True" AutoGenerateColumns="False" CanUserAddRows="False">
                 <DataGrid.Columns>
@@ -60,13 +66,14 @@
                             </DataTemplate>
                         </DataGridTemplateColumn.CellTemplate>
                     </DataGridTemplateColumn>
-                    <DataGridTextColumn Header="QUANTIDADE" Binding="{Binding Quantity, StringFormat=N2}" Width="140"/>
+                    <DataGridTextColumn Header="QUANTIDADE" Binding="{Binding Quantity}" Width="140"/>
+                    <DataGridTextColumn Header="PAGO (QTD.)" Binding="{Binding PaidQuantity}" Width="105"/>
                     <DataGridTextColumn Header="UNITÁRIO" Binding="{Binding UnitPrice, StringFormat=C2}" Width="140"/>
                     <DataGridTextColumn Header="TOTAL" Binding="{Binding Total, StringFormat=C2}" Width="140"/>
                     <DataGridTemplateColumn Header="AÇÃO" Width="72">
                         <DataGridTemplateColumn.CellTemplate>
                             <DataTemplate>
-                                <Button Tag="{Binding}" ToolTip="Remover item da comanda"
+                                <Button Tag="{Binding}" ToolTip="Selecionar linha original para remoção"
                                         HorizontalAlignment="Center" VerticalAlignment="Center"
                                         Width="34" Height="30" Padding="0"
                                         Background="#FDECEC" BorderBrush="#F2C4C1" BorderThickness="1"
@@ -103,10 +110,15 @@
                 <TextBlock x:Name="BalanceText" Text="Saldo: R$ 0,00" FontSize="22" FontWeight="Bold" Foreground="#18A999"/>
             </StackPanel>
             <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,0,0,5">
+                    <CheckBox x:Name="PayItemsCheckBox" Content="Pagar por item" VerticalAlignment="Center" Click="PayItems_Click"/>
+                    <Button x:Name="SelectPaymentItemsButton" Content="Selecionar itens" Margin="8,0,0,0" Padding="8,4"
+                            IsEnabled="False" Click="SelectPaymentItems_Click"/>
+                </StackPanel>
                 <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,0,0,7">
                     <TextBlock Text="Valor" VerticalAlignment="Center" Margin="0,0,6,0"/>
-                    <TextBox x:Name="PaymentAmountBox" Width="108" Padding="8" VerticalContentAlignment="Center"/>
-                    <ComboBox x:Name="PaymentCombo" Width="164" Padding="8" Margin="6,0,0,0" SelectedIndex="0">
+                    <TextBox x:Name="PaymentAmountBox" Width="108" Padding="8" VerticalContentAlignment="Center" TextChanged="PaymentAmount_TextChanged"/>
+                    <ComboBox x:Name="PaymentCombo" Width="164" Padding="8" Margin="6,0,0,0" SelectedIndex="0" SelectionChanged="PaymentCombo_SelectionChanged">
                         <ComboBoxItem Content="Dinheiro"/>
                         <ComboBoxItem Content="Pix"/>
                         <ComboBoxItem Content="Cartão de débito"/>
@@ -114,12 +126,18 @@
                     </ComboBox>
                     <Button Content="Registrar pagamento" Background="#18A999" Foreground="White" Padding="12,9" Margin="6,0,0,0" Click="Pay_Click"/>
                 </StackPanel>
+                <StackPanel x:Name="ChangePanel" Visibility="Collapsed" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,0,0,7">
+                    <TextBlock Text="Recebido" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                    <TextBox x:Name="ReceivedAmountBox" Width="108" Padding="8" VerticalContentAlignment="Center" TextChanged="ReceivedAmount_TextChanged"/>
+                    <TextBlock Text="Troco" VerticalAlignment="Center" Margin="12,0,6,0" FontWeight="Bold"/>
+                    <TextBlock x:Name="ChangeText" Text="R$ 0,00" VerticalAlignment="Center" FontWeight="Bold" Foreground="#18A999" FontSize="16"/>
+                </StackPanel>
                 <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
-                    <Button Content="Usar saldo total" Padding="10,7" Click="UseFullBalance_Click"/>
+                    <Button x:Name="UseFullBalanceButton" Content="Usar saldo total" Padding="10,7" Click="UseFullBalance_Click"/>
                     <TextBlock Text="Dividir em" VerticalAlignment="Center" Margin="12,0,5,0"/>
                     <TextBox x:Name="SplitPeopleBox" Text="2" Width="48" Padding="7" VerticalContentAlignment="Center"/>
                     <TextBlock Text="pessoas" VerticalAlignment="Center" Margin="5,0,6,0"/>
-                    <Button Content="Calcular parcela" Padding="10,7" Click="SplitBalance_Click"/>
+                    <Button x:Name="SplitBalanceButton" Content="Calcular parcela" Padding="10,7" Click="SplitBalance_Click"/>
                 </StackPanel>
             </StackPanel>
         </Grid>

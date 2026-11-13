@@ -3,9 +3,11 @@ using System.Windows.Controls;
 using System.Windows.Documents;
 using System.Windows.Media;
 using System.Globalization;
+using System.Printing;
 using System.Windows.Threading;
 using SYSMR.Application.Models;
 using SYSMR.Domain.Entities;
+using SYSMR.Infrastructure;
 using SYSMR.Infrastructure.Persistence;
 
 namespace SYSMR.UI;
@@ -18,16 +20,27 @@ public partial class RestaurantOrderWindow : Window
     private RestaurantOrderRecord? _order;
     private DispatcherTimer? _orderRefreshTimer;
     private bool _refreshingOrder;
+    private readonly KitchenPrintService? _kitchen;
+    private IReadOnlyList<RestaurantItemPaymentSelection> _paymentSelections = [];
 
     public RestaurantOrderWindow(
         SqliteRestaurantRepository restaurant,
         RestaurantTableRecord table,
-        IReadOnlyList<RestaurantEmployeeRecord> employees)
+        IReadOnlyList<RestaurantEmployeeRecord> employees,
+        bool serviceChargeFeatureEnabled = true,
+        KitchenPrintService? kitchen = null)
     {
         InitializeComponent();
         _restaurant = restaurant;
         _table = table;
         _employees = employees;
+        _kitchen = kitchen;
+        RestaurantOrderNotifier.OrderChanged += OnLocalOrderChanged;
+        if (!serviceChargeFeatureEnabled)
+        {
+            WaiterServiceChargeCheckBox.Visibility = Visibility.Collapsed;
+            ServiceChargeText.Visibility = Visibility.Collapsed;
+        }
         TitleText.Text = $"Comanda • Mesa {table.Number}";
         EmployeeCombo.ItemsSource = employees;
         Loaded += async (_, _) =>
@@ -40,7 +53,28 @@ public partial class RestaurantOrderWindow : Window
                 _orderRefreshTimer.Start();
             }
         };
-        Closed += (_, _) => _orderRefreshTimer?.Stop();
+        Closed += (_, _) =>
+        {
+            _orderRefreshTimer?.Stop();
+            RestaurantOrderNotifier.OrderChanged -= OnLocalOrderChanged;
+        };
+    }
+
+    private void OnLocalOrderChanged(object? sender, EventArgs e)
+    {
+        DebugLog.Write("[RestaurantOrderWindow] OrderChanged recebido!");
+        if (!IsLoaded)
+        {
+            DebugLog.Write("[RestaurantOrderWindow] Janela não carregada, ignorando.");
+            return;
+        }
+        DebugLog.Write("[RestaurantOrderWindow] Agendando atualização da comanda...");
+        Dispatcher.BeginInvoke(new Action(async () =>
+        {
+            DebugLog.Write("[RestaurantOrderWindow] Atualizando comanda...");
+            await RefreshOrderFromSyncAsync();
+            DebugLog.Write("[RestaurantOrderWindow] Comanda atualizada.");
+        }));
     }
 
     private async Task LoadOrderAsync(IReadOnlyList<RestaurantEmployeeRecord> employees)
@@ -73,8 +107,12 @@ public partial class RestaurantOrderWindow : Window
         var previousOrder = _order;
         var previousPaymentText = PaymentAmountBox.Text;
         _order = await _restaurant.GetOpenOrderAsync(_table.Id);
+        if (_order is not null && previousOrder?.Id == _order.Id && _order.PaidTotal == 0)
+            _order = _order with { WaiterServiceChargeEnabled = previousOrder.WaiterServiceChargeEnabled };
         if (_order is null)
         {
+            _paymentSelections = [];
+            TitleText.Text = $"Comanda • Mesa {_table.Number}";
             ItemsGrid.ItemsSource = null;
             WaiterServiceChargeCheckBox.IsChecked = false;
             WaiterServiceChargeCheckBox.IsEnabled = true;
@@ -83,9 +121,15 @@ public partial class RestaurantOrderWindow : Window
             BalanceText.Text = "Saldo: R$ 0,00";
             PaymentAmountBox.Text = "0,00";
             StatusText.Text = "Mesa livre • adicione o primeiro item para abrir a comanda.";
+            CustomerText.Text = "Cliente: não informado";
             return;
         }
-        ItemsGrid.ItemsSource = _order.Items;
+        ItemsGrid.ItemsSource = RestaurantOrderDisplayGroup.Create(_order.Items);
+        if (PayItemsCheckBox.IsChecked == true)
+            UpdateItemPaymentSelection();
+        TitleText.Text = _order.DailyNumber is null
+            ? $"Comanda • Mesa {_table.Number}"
+            : $"Comanda Nº {_order.DailyNumber} • Mesa {_table.Number}";
         EmployeeCombo.SelectedItem = _employees.FirstOrDefault(employee => employee.Name == _order.EmployeeName);
         EmployeeCombo.IsEnabled = _order.Items.Count == 0;
         WaiterServiceChargeCheckBox.IsChecked = _order.WaiterServiceChargeEnabled;
@@ -96,11 +140,15 @@ public partial class RestaurantOrderWindow : Window
         var paymentMatchesPreviousBalance = previousOrder is not null &&
             RestaurantEntryWindow.TryReadAmount(previousPaymentText, out var enteredAmount) &&
             enteredAmount == previousOrder.RemainingTotal;
-        if (!preservePaymentAmount || paymentMatchesPreviousBalance)
+        if (PayItemsCheckBox.IsChecked != true && (!preservePaymentAmount || paymentMatchesPreviousBalance))
             PaymentAmountBox.Text = _order.RemainingTotal.ToString("N2", System.Globalization.CultureInfo.CurrentCulture);
         StatusText.Text = string.IsNullOrWhiteSpace(_order.EmployeeName)
             ? $"Aberta em {_order.OpenedAt.ToLocalTime():dd/MM/yyyy HH:mm}"
             : $"Atendente: {_order.EmployeeName} • aberta em {_order.OpenedAt.ToLocalTime():HH:mm}";
+        if (PayItemsCheckBox.IsChecked == true && _order.HasUnallocatedPayments)
+            StatusText.Text = "Há pagamento sem vínculo com itens; desmarque Pagar por item e continue por valor.";
+        CustomerText.Text = string.IsNullOrWhiteSpace(_order.CustomerName)
+            ? "Cliente: não informado" : $"Cliente: {_order.CustomerName}";
     }
 
     private async Task RefreshOrderFromSyncAsync()
@@ -134,17 +182,19 @@ public partial class RestaurantOrderWindow : Window
         if (RestaurantEntryWindow.TryReadAmount(PaymentAmountBox.Text, out var enteredAmount) &&
             enteredAmount == previousBalance)
             PaymentAmountBox.Text = _order.RemainingTotal.ToString("N2", System.Globalization.CultureInfo.CurrentCulture);
+        if (PayItemsCheckBox.IsChecked == true)
+            UpdateItemPaymentSelection();
     }
 
     private void UseFullBalance_Click(object sender, RoutedEventArgs e)
     {
-        if (_order is not null)
+        if (_order is not null && PayItemsCheckBox.IsChecked != true)
             PaymentAmountBox.Text = _order.RemainingTotal.ToString("N2", CultureInfo.CurrentCulture);
     }
 
     private void SplitBalance_Click(object sender, RoutedEventArgs e)
     {
-        if (_order is null)
+        if (_order is null || PayItemsCheckBox.IsChecked == true)
             return;
         if (!int.TryParse(SplitPeopleBox.Text, NumberStyles.Integer, CultureInfo.CurrentCulture, out var peopleCount) ||
             peopleCount is < 1 or > 100)
@@ -175,14 +225,41 @@ public partial class RestaurantOrderWindow : Window
                 MessageBoxButton.OK, MessageBoxImage.Warning);
             return;
         }
+        IReadOnlyList<RestaurantOrderSelection>? selections = null;
+        string? size = null;
+        if (item.PriceM is not null || item.PriceG is not null)
+        {
+            if (item.PriceM is null)
+                size = "G";
+            else if (item.PriceG is null)
+                size = "M";
+            else
+            {
+                var choice = MessageBox.Show(
+                    $"Escolha o tamanho de {item.Name}:\n\nSim: M — {item.PriceM:C2}\nNão: G — {item.PriceG:C2}",
+                    "Tamanho", MessageBoxButton.YesNoCancel, MessageBoxImage.Question);
+                if (choice == MessageBoxResult.Cancel)
+                    return;
+                size = choice == MessageBoxResult.Yes ? "M" : "G";
+            }
+        }
+        if (item.Options is { Count: > 0 } itemOptions)
+        {
+            var dialog = new OrderOptionsWindow(item.Name, quantity, itemOptions) { Owner = this };
+            if (dialog.ShowDialog() != true)
+                return;
+            selections = dialog.Selections;
+        }
         try
         {
-            await _restaurant.AddOrderItemAsync(
-                _table.Id,
-                item.Id,
-                quantity,
-                (EmployeeCombo.SelectedItem as RestaurantEmployeeRecord)?.Id,
-                ObservationBox.Text);
+            if (size is null)
+                await _restaurant.AddOrderItemAsync(
+                    _table.Id, item.Id, quantity, (EmployeeCombo.SelectedItem as RestaurantEmployeeRecord)?.Id,
+                    ObservationBox.Text, selections);
+            else
+                await _restaurant.AddSizedOrderItemAsync(
+                    _table.Id, item.Id, quantity, (EmployeeCombo.SelectedItem as RestaurantEmployeeRecord)?.Id,
+                    ObservationBox.Text, selections, size);
             QuantityBox.Text = "1";
             ObservationBox.Clear();
             await RefreshOrderAsync();
@@ -190,15 +267,59 @@ public partial class RestaurantOrderWindow : Window
         catch (Exception exception)
         {
             ShowError("Não foi possível adicionar o item", exception);
+            return;
+        }
+        if (_kitchen is { Enabled: true })
+        {
+            await _kitchen.ProcessPendingAsync();
+            var failed = (await _kitchen.GetFailedAsync()).FirstOrDefault(batch => batch.TableNumber == _table.Number);
+            if (failed is not null)
+            {
+                StatusText.Text = "⚠ Item lançado, mas a impressão automática falhou. Consulte as falhas de impressão.";
+                MessageBox.Show(
+                    $"O item foi lançado, mas a impressão automática falhou:\n\n{failed.LastError}\n\nUse a opção de reenviar falhas na tela do restaurante.",
+                    "Falha na impressão da cozinha", MessageBoxButton.OK, MessageBoxImage.Warning);
+            }
         }
     }
 
     private async void RemoveOrderItem_Click(object sender, RoutedEventArgs e)
     {
-        if (sender is not Button { Tag: RestaurantOrderItemRecord item })
+        if (sender is not Button { Tag: RestaurantOrderDisplayGroup group })
             return;
+        RestaurantOrderItemRecord item;
+        if (group.Items.Count == 1)
+            item = group.Items[0];
+        else
+        {
+            var choices = group.Items.Select((entry, index) => new
+            {
+                Item = entry,
+                Label = $"Lançamento {index + 1}: {entry.Quantity:N2} × {entry.Name} ({entry.Total:C2})"
+            }).ToArray();
+            var list = new ComboBox { ItemsSource = choices, DisplayMemberPath = "Label", SelectedIndex = 0, Margin = new Thickness(0, 8, 0, 12) };
+            var confirm = new Button { Content = "Continuar", Padding = new Thickness(12, 6, 12, 6), IsDefault = true };
+            var panel = new StackPanel { Margin = new Thickness(20) };
+            panel.Children.Add(new TextBlock { Text = "Escolha o lançamento original. A linha inteira escolhida será removida.", TextWrapping = TextWrapping.Wrap });
+            panel.Children.Add(list);
+            panel.Children.Add(confirm);
+            var dialog = new Window
+            {
+                Title = "Selecionar lançamento",
+                Owner = this,
+                WindowStartupLocation = WindowStartupLocation.CenterOwner,
+                SizeToContent = SizeToContent.WidthAndHeight,
+                MinWidth = 440,
+                ResizeMode = ResizeMode.NoResize,
+                Content = panel
+            };
+            confirm.Click += (_, _) => dialog.DialogResult = true;
+            if (dialog.ShowDialog() != true || list.SelectedIndex < 0)
+                return;
+            item = choices[list.SelectedIndex].Item;
+        }
         if (MessageBox.Show(
-                $"Remover {item.Quantity:N2} × {item.Name} ({item.Total:C2}) desta comanda?\n\nSe o item estiver vinculado ao estoque, a quantidade será devolvida.",
+                $"Remover a linha inteira de {item.Quantity:N2} × {item.Name} ({item.Total:C2}) desta comanda?\n\nSe o item estiver vinculado ao estoque, a quantidade será devolvida.\n\nEsta ação não imprime aviso à cozinha ou ao balcão. Avise a equipe pessoalmente.",
                 "Confirmar remoção do item",
                 MessageBoxButton.YesNo,
                 MessageBoxImage.Warning) != MessageBoxResult.Yes)
@@ -213,6 +334,94 @@ public partial class RestaurantOrderWindow : Window
         {
             ShowError("Não foi possível remover o item da comanda", exception);
         }
+    }
+
+    private void PaymentCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (!IsLoaded)
+            return;
+        var isCash = PaymentCombo.SelectedIndex == 0;
+        ChangePanel.Visibility = isCash ? Visibility.Visible : Visibility.Collapsed;
+        if (isCash)
+        {
+            ReceivedAmountBox.Text = PaymentAmountBox.Text;
+            UpdateChange();
+        }
+    }
+
+    private void PayItems_Click(object sender, RoutedEventArgs e)
+    {
+        if (PayItemsCheckBox.IsChecked == true && (_order is null || _order.HasUnallocatedPayments))
+        {
+            PayItemsCheckBox.IsChecked = false;
+            MessageBox.Show(_order is null ? "Abra uma comanda antes de selecionar itens." :
+                "Há pagamento por valor sem vínculo com itens nesta comanda. Continue recebendo por valor.",
+                "Pagamento por item indisponível", MessageBoxButton.OK, MessageBoxImage.Information);
+        }
+        var enabled = PayItemsCheckBox.IsChecked == true;
+        SelectPaymentItemsButton.IsEnabled = enabled;
+        PaymentAmountBox.IsReadOnly = enabled;
+        UseFullBalanceButton.IsEnabled = !enabled;
+        SplitBalanceButton.IsEnabled = !enabled;
+        _paymentSelections = [];
+        PaymentAmountBox.Text = enabled ? "0,00" : (_order?.RemainingTotal ?? 0m).ToString("N2", CultureInfo.CurrentCulture);
+        if (enabled)
+            SelectPaymentItems_Click(sender, e);
+    }
+
+    private void SelectPaymentItems_Click(object sender, RoutedEventArgs e)
+    {
+        if (_order is null)
+            return;
+        if (_order.HasUnallocatedPayments)
+        {
+            MessageBox.Show("Há pagamento por valor sem vínculo com itens. Desmarque Pagar por item e continue por valor.",
+                "Pagamento por item indisponível", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+        var dialog = new RestaurantItemSelectionWindow(_order, unpaidOnly: true) { Owner = this };
+        if (dialog.ShowDialog() != true)
+            return;
+        _paymentSelections = dialog.Selections;
+        UpdateItemPaymentSelection();
+    }
+
+    private void UpdateItemPaymentSelection()
+    {
+        if (_order is null)
+            return;
+        if (_order.HasUnallocatedPayments || _paymentSelections.Any(selection =>
+                _order.Items.FirstOrDefault(item => item.Id == selection.ItemId) is not { } item ||
+                selection.Quantity > item.RemainingQuantity))
+        {
+            _paymentSelections = [];
+            StatusText.Text = "A seleção de pagamento mudou; selecione os itens novamente.";
+        }
+        var amount = _paymentSelections.Count == 0 ? 0m : _order.ItemPaymentAmount(_paymentSelections);
+        PaymentAmountBox.Text = amount.ToString("N2", CultureInfo.CurrentCulture);
+    }
+
+    private void ReceivedAmount_TextChanged(object sender, TextChangedEventArgs e) => UpdateChange();
+
+    private void PaymentAmount_TextChanged(object sender, TextChangedEventArgs e) => UpdateChange();
+
+    private void UpdateChange()
+    {
+        if (ChangeText is null || ReceivedAmountBox is null || PaymentAmountBox is null)
+            return;
+        if (_order is null ||
+            !RestaurantEntryWindow.TryReadAmount(ReceivedAmountBox.Text, out var received) ||
+            !RestaurantEntryWindow.TryReadAmount(PaymentAmountBox.Text, out var paymentAmount) ||
+            paymentAmount <= 0)
+        {
+            ChangeText.Text = "R$ 0,00";
+            return;
+        }
+        var change = received - paymentAmount;
+        ChangeText.Text = change >= 0 ? change.ToString("C2") : $"Faltam {(-change):C2}";
+        ChangeText.Foreground = change >= 0
+            ? new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(24, 169, 153))
+            : new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(180, 35, 24));
     }
 
     private async void Pay_Click(object sender, RoutedEventArgs e)
@@ -238,11 +447,14 @@ public partial class RestaurantOrderWindow : Window
         };
         try
         {
-            var payment = await _restaurant.PayOrderAsync(
-                _table.Id,
-                method,
-                amount,
-                WaiterServiceChargeCheckBox.IsChecked == true);
+            if (sender is Button button)
+                button.IsEnabled = false;
+            var payment = PayItemsCheckBox.IsChecked == true
+                ? await _restaurant.PayOrderItemsAsync(_table.Id, method, _paymentSelections,
+                    WaiterServiceChargeCheckBox.IsChecked == true, amount)
+                : await _restaurant.PayOrderAsync(_table.Id, method, amount,
+                    WaiterServiceChargeCheckBox.IsChecked == true);
+            _paymentSelections = [];
             if (payment.RemainingTotal > 0)
             {
                 await RefreshOrderAsync();
@@ -259,224 +471,73 @@ public partial class RestaurantOrderWindow : Window
         {
             ShowError("Não foi possível receber o pagamento", exception);
         }
+        finally
+        {
+            if (sender is Button button)
+                button.IsEnabled = true;
+        }
     }
 
-    private void PrintKitchen_Click(object sender, RoutedEventArgs e)
+    private async void PrintOrder_Click(object sender, RoutedEventArgs e)
     {
-        if (_order is not { Items.Count: > 0 })
-        {
-            MessageBox.Show("Adicione itens à comanda antes de imprimir o pedido.", "Comanda vazia",
-                MessageBoxButton.OK, MessageBoxImage.Warning);
-            return;
-        }
-
         try
         {
-            var printDialog = new PrintDialog();
-            if (printDialog.ShowDialog() != true)
+            if (_kitchen is null)
+                throw new InvalidOperationException("O serviço de impressão não está disponível.");
+            await RefreshOrderAsync(preservePaymentAmount: true);
+            if (_order is not { Items.Count: > 0 } order)
+            {
+                MessageBox.Show("Adicione itens à comanda antes de imprimir.", "Comanda vazia",
+                    MessageBoxButton.OK, MessageBoxImage.Warning);
                 return;
-
-            var printableWidth = printDialog.PrintableAreaWidth > 0
-                ? printDialog.PrintableAreaWidth
-                : 280;
-            var observationsHeight = _order.Items.Sum(item =>
-                string.IsNullOrWhiteSpace(item.Observation) ? 0 : 24 + item.Observation.Length / 42 * 12);
-            var estimatedPageHeight = Math.Max(300, 260 + 54 * _order.Items.Count + observationsHeight);
-            var pageHeight = printDialog.PrintableAreaHeight > 0
-                ? Math.Min(printDialog.PrintableAreaHeight, estimatedPageHeight)
-                : estimatedPageHeight;
-            var ink = new SolidColorBrush(Color.FromRgb(23, 35, 59));
-            var accent = new SolidColorBrush(Color.FromRgb(24, 169, 153));
-            var muted = new SolidColorBrush(Color.FromRgb(104, 119, 143));
-            var separator = new SolidColorBrush(Color.FromRgb(222, 228, 236));
-            var document = new FlowDocument
-            {
-                PagePadding = new Thickness(22, 18, 22, 18),
-                FontFamily = new FontFamily("Segoe UI"),
-                FontSize = 12,
-                PageWidth = printableWidth,
-                PageHeight = pageHeight,
-                ColumnWidth = Math.Max(120, printableWidth - 44),
-                TextAlignment = TextAlignment.Left
-            };
-
-            var brand = new Paragraph(new Run("SYSMR"))
-            {
-                FontSize = 11,
-                FontWeight = FontWeights.Bold,
-                Foreground = accent,
-                Margin = new Thickness(0, 0, 0, 3),
-                TextAlignment = TextAlignment.Center
-            };
-            document.Blocks.Add(brand);
-            document.Blocks.Add(new Paragraph(new Run("PEDIDO DE COZINHA"))
-            {
-                FontSize = 17,
-                FontWeight = FontWeights.Bold,
-                Foreground = ink,
-                Margin = new Thickness(0, 0, 0, 12),
-                TextAlignment = TextAlignment.Center
-            });
-
-            var summary = new Table { CellSpacing = 0 };
-            summary.Columns.Add(new TableColumn { Width = new GridLength(1, GridUnitType.Star) });
-            summary.Columns.Add(new TableColumn { Width = new GridLength(1, GridUnitType.Star) });
-            var summaryRow = new TableRow();
-            summaryRow.Cells.Add(CreateTicketCell("MESA", $"Nº {_table.Number}", ink, accent, TextAlignment.Left));
-            summaryRow.Cells.Add(CreateTicketCell(
-                "HORÁRIO",
-                _order.OpenedAt.ToLocalTime().ToString("dd/MM/yyyy  HH:mm"),
-                ink,
-                accent,
-                TextAlignment.Right));
-            summary.RowGroups.Add(new TableRowGroup { Rows = { summaryRow } });
-            document.Blocks.Add(summary);
-            document.Blocks.Add(new Paragraph(new Run(
-                $"ATENDENTE  {(_order.EmployeeName.Length == 0 ? "Não informado" : _order.EmployeeName)}"))
-            {
-                FontSize = 10,
-                Foreground = muted,
-                Margin = new Thickness(0, 8, 0, 14),
-                TextAlignment = TextAlignment.Center
-            });
-
-            var sectionTitle = new Paragraph(new Run("ITENS DO PEDIDO"))
-            {
-                FontSize = 10,
-                FontWeight = FontWeights.Bold,
-                Foreground = ink,
-                BorderBrush = separator,
-                BorderThickness = new Thickness(0, 0, 0, 1),
-                Padding = new Thickness(0, 0, 0, 6),
-                Margin = new Thickness(0, 0, 0, 5)
-            };
-            document.Blocks.Add(sectionTitle);
-
-            var itemsTable = new Table { CellSpacing = 0 };
-            itemsTable.Columns.Add(new TableColumn { Width = new GridLength(1, GridUnitType.Star) });
-            itemsTable.Columns.Add(new TableColumn { Width = new GridLength(48) });
-            var itemRows = new TableRowGroup();
-            foreach (var item in _order.Items)
-            {
-                var row = new TableRow();
-                row.Cells.Add(CreateKitchenItemCell(item, ink, muted, separator));
-                row.Cells.Add(CreateTicketCell(
-                    "× " + item.Quantity.ToString("0.##", CultureInfo.GetCultureInfo("pt-BR")),
-                    null,
-                    ink,
-                    muted,
-                    TextAlignment.Right));
-                itemRows.Rows.Add(row);
             }
-            itemsTable.RowGroups.Add(itemRows);
-            document.Blocks.Add(itemsTable);
-            document.Blocks.Add(new Paragraph(new Run(
-                $"{_order.Items.Sum(item => item.Quantity):0.##} unidade(s)  •  { _order.Items.Count} linha(s)"))
+            IReadOnlyList<RestaurantItemPaymentSelection> selections;
+            if (PrintScopeCombo.SelectedIndex == 1)
             {
-                FontSize = 9,
-                Foreground = muted,
-                BorderBrush = separator,
-                BorderThickness = new Thickness(0, 1, 0, 0),
-                Padding = new Thickness(0, 8, 0, 0),
-                Margin = new Thickness(0, 8, 0, 0),
-                TextAlignment = TextAlignment.Center
-            });
-            document.Blocks.Add(new Paragraph(new Run("Preparar e conferir antes de entregar."))
+                var dialog = new RestaurantItemSelectionWindow(order, unpaidOnly: false) { Owner = this };
+                if (dialog.ShowDialog() != true)
+                    return;
+                selections = dialog.Selections;
+            }
+            else
             {
-                FontSize = 9,
-                Foreground = muted,
-                FontStyle = FontStyles.Italic,
-                Margin = new Thickness(0, 10, 0, 0),
-                TextAlignment = TextAlignment.Center
-            });
-
-            printDialog.PrintDocument(
-                ((IDocumentPaginatorSource)document).DocumentPaginator,
-                "Pedido de cozinha SYSMR");
+                selections = order.Items.Select(item => new RestaurantItemPaymentSelection(item.Id, item.Quantity)).ToArray();
+            }
+            var quantities = selections.ToDictionary(selection => selection.ItemId, selection => selection.Quantity);
+            await RefreshOrderAsync(preservePaymentAmount: true);
+            if (_order is null || _order.Id != order.Id ||
+                selections.Any(selection => _order.Items.FirstOrDefault(item => item.Id == selection.ItemId) is not { } item ||
+                    selection.Quantity > item.Quantity))
+                throw new InvalidOperationException("A comanda mudou durante a seleção. Atualize e tente imprimir novamente.");
+            order = _order;
+            var batches = await _restaurant.GetAllKitchenBatchesForTableAsync(_table.Id);
+            var batchItems = batches.Where(batch => batch.OrderId == order.Id)
+                .SelectMany(batch => batch.Items).ToDictionary(item => item.Id);
+            if (selections.Any(selection => !batchItems.TryGetValue(selection.ItemId, out var item) ||
+                    selection.Quantity > item.Quantity))
+                throw new InvalidOperationException("A comanda mudou durante a seleção. Atualize e tente imprimir novamente.");
+            if (PrintDestinationCombo.SelectedIndex == 0)
+            {
+                var copies = batches.Where(batch => batch.OrderId == order.Id)
+                    .Select(batch => batch with
+                    {
+                        Items = batch.Items.Where(item => quantities.ContainsKey(item.Id))
+                            .Select(item => item with { Quantity = quantities[item.Id] }).ToArray()
+                    }).Where(batch => batch.Items.Count > 0).ToArray();
+                await _kitchen.PrintKitchenCopiesAsync(order, copies);
+            }
+            else
+            {
+                var selectedItems = order.Items.Where(item => quantities.ContainsKey(item.Id))
+                    .Select(item => item with { Quantity = quantities[item.Id] }).ToArray();
+                var area = batches.First(batch => batch.OrderId == order.Id).AreaName;
+                await _kitchen.PrintCounterCheckAsync(order, selectedItems, _table.Number, area);
+            }
         }
         catch (Exception exception)
         {
-            ShowError("Não foi possível imprimir o pedido da cozinha", exception);
+            ShowError("Não foi possível imprimir a comanda", exception);
         }
-    }
-
-    private static TableCell CreateTicketCell(
-        string primaryText,
-        string? secondaryText,
-        Brush primaryBrush,
-        Brush secondaryBrush,
-        TextAlignment alignment)
-    {
-        var cell = new TableCell
-        {
-            Padding = new Thickness(4, 6, 4, 6),
-            TextAlignment = alignment,
-            BorderBrush = new SolidColorBrush(Color.FromRgb(236, 239, 244)),
-            BorderThickness = new Thickness(0, 0, 0, 0.5)
-        };
-        if (secondaryText is not null)
-        {
-            cell.Blocks.Add(new Paragraph(new Run(primaryText))
-            {
-                FontSize = 8,
-                FontWeight = FontWeights.Bold,
-                Foreground = secondaryBrush,
-                Margin = new Thickness(0, 0, 0, 2),
-                TextAlignment = alignment
-            });
-            cell.Blocks.Add(new Paragraph(new Run(secondaryText))
-            {
-                FontSize = 12,
-                FontWeight = FontWeights.SemiBold,
-                Foreground = primaryBrush,
-                Margin = new Thickness(0),
-                TextAlignment = alignment
-            });
-        }
-        else
-        {
-            cell.Blocks.Add(new Paragraph(new Run(primaryText))
-            {
-                FontSize = 12,
-                FontWeight = FontWeights.SemiBold,
-                Foreground = primaryBrush,
-                Margin = new Thickness(0),
-                TextAlignment = alignment
-            });
-        }
-        return cell;
-    }
-
-    private static TableCell CreateKitchenItemCell(
-        RestaurantOrderItemRecord item,
-        Brush itemBrush,
-        Brush observationBrush,
-        Brush borderBrush)
-    {
-        var cell = new TableCell
-        {
-            Padding = new Thickness(4, 6, 4, 6),
-            BorderBrush = borderBrush,
-            BorderThickness = new Thickness(0, 0, 0, 0.5)
-        };
-        cell.Blocks.Add(new Paragraph(new Run(item.Name))
-        {
-            FontSize = 12,
-            FontWeight = FontWeights.SemiBold,
-            Foreground = itemBrush,
-            Margin = new Thickness(0)
-        });
-        if (!string.IsNullOrWhiteSpace(item.Observation))
-        {
-            cell.Blocks.Add(new Paragraph(new Run($"Obs.: {item.Observation}"))
-            {
-                FontSize = 10,
-                FontWeight = FontWeights.Normal,
-                Foreground = observationBrush,
-                Margin = new Thickness(0, 2, 0, 0)
-            });
-        }
-        return cell;
     }
 
     private static void ShowError(string title, Exception exception) =>

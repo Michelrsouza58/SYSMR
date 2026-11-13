@@ -4,3 +4,5 @@
 *.user
 *.suo
 SYSMR.FirebaseFunctions/.env
+
+artifacts/

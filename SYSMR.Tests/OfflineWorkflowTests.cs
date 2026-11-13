@@ -1,9 +1,14 @@
+using System.Net;
+using System.Net.Http.Json;
+using System.Text;
 using System.Text.Json;
 using Microsoft.Data.Sqlite;
 using SYSMR.Application.Services;
 using SYSMR.Application.Models;
 using SYSMR.Domain.Entities;
+using SYSMR.Infrastructure.LocalServer;
 using SYSMR.Infrastructure.Persistence;
+using SYSMR.Infrastructure.Printing;
 
 namespace SYSMR.Tests;
 
@@ -487,6 +492,168 @@ public sealed class OfflineWorkflowTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task RestaurantItemPaymentsTrackFractionalQuantitiesAndRounding()
+    {
+        var restaurant = new SqliteRestaurantRepository(_database);
+        await restaurant.InitializeAsync();
+        var area = Assert.Single(await restaurant.GetAreasAsync());
+        var table = (await restaurant.GetTablesAsync(area.Id))[0];
+        var menu = new RestaurantMenuItemRecord(Guid.NewGuid(), "Porção", "Comida", 0.05m, true);
+        await restaurant.SaveMenuItemAsync(menu);
+        await restaurant.AddOrderItemAsync(table.Id, menu.Id, 3m);
+        await restaurant.OpenCashSessionAsync(0m);
+        var order = (await restaurant.GetOpenOrderAsync(table.Id))! with { WaiterServiceChargeEnabled = true };
+        var item = Assert.Single(order.Items);
+        var first = new[] { new RestaurantItemPaymentSelection(item.Id, 1m) };
+        Assert.Equal(0.06m, order.ItemPaymentAmount(first));
+        var payment = await restaurant.PayOrderItemsAsync(table.Id, PaymentMethod.Pix, first, true, 0.06m);
+        Assert.Equal(0.11m, payment.RemainingTotal);
+        order = (await restaurant.GetOpenOrderAsync(table.Id))!;
+        Assert.Equal(1m, Assert.Single(order.Items).PaidQuantity);
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            restaurant.PayOrderItemsAsync(table.Id, PaymentMethod.Cash, [new(item.Id, 3m)], true, 0.11m));
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            restaurant.PayOrderItemsAsync(table.Id, PaymentMethod.Cash, [new(item.Id, 1m)], true, 0.06m));
+        var second = new[] { new RestaurantItemPaymentSelection(item.Id, 0.5m) };
+        Assert.Equal(0.03m, order.ItemPaymentAmount(second));
+        await restaurant.PayOrderItemsAsync(table.Id, PaymentMethod.Cash, second, true, 0.03m);
+        order = (await restaurant.GetOpenOrderAsync(table.Id))!;
+        Assert.Equal(1.5m, Assert.Single(order.Items).PaidQuantity);
+        var last = new[] { new RestaurantItemPaymentSelection(item.Id, 1.5m) };
+        Assert.Equal(0.08m, order.ItemPaymentAmount(last));
+        await restaurant.PayOrderItemsAsync(table.Id, PaymentMethod.Cash, last, true, 0.08m);
+        Assert.Null(await restaurant.GetOpenOrderAsync(table.Id));
+        var cash = (await restaurant.GetOpenCashSessionAsync())!;
+        Assert.Equal(0.11m, cash.CashSales);
+        Assert.Equal(0.06m, cash.OtherSales);
+        await using var connection = _database.CreateConnection();
+        await connection.OpenAsync();
+        await using var count = connection.CreateCommand();
+        count.CommandText = "SELECT COUNT(*) FROM RestaurantPaymentItems;";
+        Assert.Equal(3L, await count.ExecuteScalarAsync());
+    }
+
+    [Fact]
+    public async Task RestaurantItemPaymentsBlockUnallocatedPaymentsAndRollbackInvalidSelections()
+    {
+        var restaurant = new SqliteRestaurantRepository(_database);
+        await restaurant.InitializeAsync();
+        var table = (await restaurant.GetTablesAsync(Assert.Single(await restaurant.GetAreasAsync()).Id))[0];
+        var menu = new RestaurantMenuItemRecord(Guid.NewGuid(), "Bebida", "Bebida", 10m, true);
+        await restaurant.SaveMenuItemAsync(menu);
+        await restaurant.AddOrderItemAsync(table.Id, menu.Id, 3m);
+        await restaurant.OpenCashSessionAsync(0m);
+        var item = Assert.Single((await restaurant.GetOpenOrderAsync(table.Id))!.Items);
+        await restaurant.PayOrderItemsAsync(table.Id, PaymentMethod.Pix, [new(item.Id, 1m)], false, 10m);
+        await restaurant.PayOrderAsync(table.Id, PaymentMethod.Cash, 5m, false);
+        var order = (await restaurant.GetOpenOrderAsync(table.Id))!;
+        Assert.True(order.HasUnallocatedPayments);
+        Assert.Equal(1m, Assert.Single(order.Items).PaidQuantity);
+        Assert.Equal(15m, order.RemainingTotal);
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            restaurant.PayOrderItemsAsync(table.Id, PaymentMethod.Pix, [new(item.Id, 1m)], false, 10m));
+        Assert.Equal(15m, (await restaurant.GetOpenOrderAsync(table.Id))!.RemainingTotal);
+        await restaurant.PayOrderAsync(table.Id, PaymentMethod.Pix, 15m, false);
+        Assert.Null(await restaurant.GetOpenOrderAsync(table.Id));
+
+        await restaurant.AddOrderItemAsync(table.Id, menu.Id, 2m);
+        var newItem = Assert.Single((await restaurant.GetOpenOrderAsync(table.Id))!.Items);
+        await restaurant.PayOrderAsync(table.Id, PaymentMethod.Pix, 5m, false);
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            restaurant.PayOrderItemsAsync(table.Id, PaymentMethod.Cash, [new(newItem.Id, 1m)], false, 10m));
+        Assert.Equal(15m, (await restaurant.GetOpenOrderAsync(table.Id))!.RemainingTotal);
+    }
+
+    [Fact]
+    public async Task RestaurantItemPaymentsRejectDuplicateAndForeignItemsWithoutRecordingPayment()
+    {
+        var restaurant = new SqliteRestaurantRepository(_database);
+        await restaurant.InitializeAsync();
+        var tables = await restaurant.GetTablesAsync(Assert.Single(await restaurant.GetAreasAsync()).Id);
+        var menu = new RestaurantMenuItemRecord(Guid.NewGuid(), "Item", "Comida", 10m, true);
+        await restaurant.SaveMenuItemAsync(menu);
+        await restaurant.AddOrderItemAsync(tables[0].Id, menu.Id, 2m);
+        await restaurant.AddOrderItemAsync(tables[1].Id, menu.Id, 1m);
+        await restaurant.OpenCashSessionAsync(0m);
+        var item = Assert.Single((await restaurant.GetOpenOrderAsync(tables[0].Id))!.Items);
+        var foreign = Assert.Single((await restaurant.GetOpenOrderAsync(tables[1].Id))!.Items);
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            restaurant.PayOrderItemsAsync(tables[0].Id, PaymentMethod.Cash,
+                [new(item.Id, 1m), new(item.Id, 1m)], false, 20m));
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            restaurant.PayOrderItemsAsync(tables[0].Id, PaymentMethod.Cash, [new(foreign.Id, 1m)], false, 10m));
+        Assert.Equal(0m, (await restaurant.GetOpenOrderAsync(tables[0].Id))!.PaidTotal);
+        Assert.Equal(0m, (await restaurant.GetOpenCashSessionAsync())!.CashSales);
+    }
+
+    [Fact]
+    public async Task RestaurantItemPaymentsConcurrentSelectionsCannotPayTheSameQuantityTwice()
+    {
+        var restaurant = new SqliteRestaurantRepository(_database);
+        await restaurant.InitializeAsync();
+        var table = (await restaurant.GetTablesAsync(Assert.Single(await restaurant.GetAreasAsync()).Id))[0];
+        var menu = new RestaurantMenuItemRecord(Guid.NewGuid(), "Item", "Comida", 10m, true);
+        await restaurant.SaveMenuItemAsync(menu);
+        await restaurant.AddOrderItemAsync(table.Id, menu.Id, 1m);
+        await restaurant.AddOrderItemAsync(table.Id, menu.Id, 1m);
+        await restaurant.OpenCashSessionAsync(0m);
+        var item = (await restaurant.GetOpenOrderAsync(table.Id))!.Items[0];
+        async Task<bool> TryPay()
+        {
+            try
+            {
+                await restaurant.PayOrderItemsAsync(table.Id, PaymentMethod.Pix, [new(item.Id, 1m)], false, 10m);
+                return true;
+            }
+            catch (InvalidOperationException)
+            {
+                return false;
+            }
+        }
+        var outcomes = await Task.WhenAll(Task.Run(TryPay), Task.Run(TryPay));
+        Assert.Single(outcomes.Where(result => result));
+        var order = (await restaurant.GetOpenOrderAsync(table.Id))!;
+        Assert.Equal(10m, order.PaidTotal);
+        Assert.Equal(1m, order.Items[0].PaidQuantity);
+        Assert.Equal(10m, order.RemainingTotal);
+    }
+
+    [Fact]
+    public async Task RestaurantCounterTicketShowsSelectedAmountsWithoutChangingPaymentOrPrintState()
+    {
+        var restaurant = new SqliteRestaurantRepository(_database);
+        await restaurant.InitializeAsync();
+        var table = (await restaurant.GetTablesAsync(Assert.Single(await restaurant.GetAreasAsync()).Id))[0];
+        var menu = new RestaurantMenuItemRecord(Guid.NewGuid(), "Peixe", "Comida", 10m, true);
+        await restaurant.SaveMenuItemAsync(menu);
+        await restaurant.AddOrderItemAsync(table.Id, menu.Id, 3m, employeeId: null, observation: "Bem frito");
+        await restaurant.OpenCashSessionAsync(0m);
+        var item = Assert.Single((await restaurant.GetOpenOrderAsync(table.Id))!.Items);
+        await restaurant.PayOrderItemsAsync(table.Id, PaymentMethod.Pix, [new(item.Id, 1m)], true, 11m);
+        var order = (await restaurant.GetOpenOrderAsync(table.Id))!;
+        var before = Assert.Single(await restaurant.GetKitchenPrintBatchesAsync(false));
+        var selected = Assert.Single(order.Items) with { Quantity = 0.5m };
+        var bytes = RestaurantCounterTicket.Build(order, [selected], table.Number, "Salão", DateTime.Now);
+        var text = Encoding.GetEncoding(850).GetString(bytes);
+        Assert.Contains("NAO E COMPROVANTE DE PAGAMENTO", text);
+        Assert.Contains("Qtd impressa: 0,5", text);
+        Assert.Contains("Paga na linha: 1", text);
+        Assert.Contains("Soma dos itens selecionados:", text);
+        Assert.Contains("5,00", text);
+        Assert.Contains("Total pago da comanda:", text);
+        Assert.Contains("11,00", text);
+        Assert.Contains("Saldo da comanda:", text);
+        Assert.Contains("22,00", text);
+        Assert.Contains("Bem frito", text);
+        Assert.Throws<ArgumentException>(() =>
+            RestaurantCounterTicket.Build(order, [selected with { Quantity = 4m }], table.Number, "Salão", DateTime.Now));
+        var after = Assert.Single(await restaurant.GetKitchenPrintBatchesAsync(false));
+        Assert.Equal(before.PrintBatchNumber, after.PrintBatchNumber);
+        Assert.Equal(before.Items.Select(i => i.Id), after.Items.Select(i => i.Id));
+        Assert.Equal(11m, (await restaurant.GetOpenOrderAsync(table.Id))!.PaidTotal);
+    }
+
+    [Fact]
     public async Task RestaurantTablesMenuOrdersAndCashWorkOffline()
     {
         var restaurant = new SqliteRestaurantRepository(_database);
@@ -563,6 +730,32 @@ public sealed class OfflineWorkflowTests : IAsyncLifetime
         Assert.NotNull(cashSession);
         Assert.Equal(34.78m, cashSession.CashSales);
         Assert.Equal(20m, cashSession.OtherSales);
+        var today = DateOnly.FromDateTime(DateTime.Today);
+        var dashboard = await restaurant.GetDashboardAsync(today.AddDays(-2), today);
+        Assert.Equal(54.78m, dashboard.TotalRevenue);
+        Assert.Equal(1, dashboard.OrderCount);
+        var waiterSales = Assert.Single(await restaurant.GetWaiterSalesAsync(today.AddDays(-2), today));
+        Assert.Equal(employee.Name, waiterSales.Name);
+        Assert.Equal(1, waiterSales.Orders);
+        Assert.Equal(54.78m, waiterSales.Total);
+        Assert.Empty(await restaurant.GetWaiterSalesAsync(today.AddDays(-30), today.AddDays(-10)));
+        Assert.Equal(54.78m, dashboard.AverageTicket);
+        Assert.Equal(3, dashboard.Days.Count);
+        Assert.Equal(2, dashboard.Methods.Count);
+        var empty = await restaurant.GetDashboardAsync(today.AddDays(-30), today.AddDays(-10));
+        Assert.Equal(0m, empty.TotalRevenue);
+        await restaurant.AddExpenseAsync("Botijão de gás", "Insumos", 12.50m, true);
+        await restaurant.AddExpenseAsync("Fornecedor de bebidas", "Insumos", 100m, false);
+        await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() =>
+            restaurant.AddExpenseAsync("Inválido", "Geral", 0m, false));
+        var withExpenses = await restaurant.GetDashboardAsync(today, today);
+        Assert.Equal(112.50m, withExpenses.TotalExpenses);
+        Assert.Equal(112.50m, Assert.Single(withExpenses.ExpenseCategories!).Total);
+        Assert.Equal(12.50m, (await restaurant.GetOpenCashSessionAsync())!.CashExpenses);
+        var expenses = await restaurant.GetExpensesAsync(today, today);
+        Assert.Equal(2, expenses.Count);
+        await restaurant.DeleteExpenseAsync(expenses[0].Id);
+        Assert.Single(await restaurant.GetExpensesAsync(today, today));
         var pendingRestaurantSync = await new SqliteSyncOutboxRepository(_database).GetPendingAsync();
         Assert.Equal(9, pendingRestaurantSync.Count(item => item.Branch == "restaurant"));
         await restaurant.CloseCashSessionAsync(cashSession.Id, 50m);
@@ -613,6 +806,833 @@ public sealed class OfflineWorkflowTests : IAsyncLifetime
         inspect.CommandText = "SELECT COUNT(*) FROM RestaurantWaiterCommands WHERE CommandId = $id AND Status = 'applied';";
         inspect.Parameters.AddWithValue("$id", command.Id);
         Assert.Equal(1L, await inspect.ExecuteScalarAsync());
+    }
+
+    [Fact]
+    public async Task LocalWaiterPinAuthenticatesAndProcessesCommandsOffline()
+    {
+        var restaurant = new SqliteRestaurantRepository(_database);
+        await restaurant.InitializeAsync();
+        var area = Assert.Single(await restaurant.GetAreasAsync());
+        var table = (await restaurant.GetTablesAsync(area.Id)).First();
+        var employee = new RestaurantEmployeeRecord(
+            Guid.NewGuid(), "Carlos", "Garçom", true, "0007", null, area.Id.ToString());
+        var menuItem = new RestaurantMenuItemRecord(Guid.NewGuid(), "Pastel", "Comidas", 9m, true);
+        await restaurant.SaveEmployeeAsync(employee);
+        await restaurant.SaveMenuItemAsync(menuItem);
+
+        Assert.Null(await restaurant.VerifyWaiterLocalPinAsync("0007", "1234"));
+        await restaurant.SetEmployeeLocalPinAsync(employee.Id, "1234");
+        Assert.Null(await restaurant.VerifyWaiterLocalPinAsync("0007", "0000"));
+        Assert.Null(await restaurant.VerifyWaiterLocalPinAsync("9999", "1234"));
+        var authenticated = await restaurant.VerifyWaiterLocalPinAsync("0007", "1234");
+        Assert.NotNull(authenticated);
+        Assert.Equal(employee.Id, authenticated!.Id);
+        Assert.True(authenticated.HasLocalPin);
+        Assert.True((await restaurant.GetEmployeesAsync()).Single(e => e.Id == employee.Id).HasLocalPin);
+
+        var command = new WaiterCommandRecord(
+            Guid.NewGuid().ToString(),
+            "addItem",
+            area.Id.ToString(),
+            table.Id.ToString(),
+            SqliteRestaurantRepository.CreateLocalWaiterUid(employee.Id),
+            menuItem.Id.ToString(),
+            3m,
+            "pending",
+            DateTimeOffset.UtcNow.ToString("O"),
+            "Sem pimenta");
+
+        var result = await restaurant.ProcessWaiterCommandAsync(command);
+        Assert.Equal("applied", result.Status);
+        var order = await restaurant.GetOpenOrderAsync(table.Id);
+        Assert.NotNull(order);
+        Assert.Equal(3m, Assert.Single(order!.Items).Quantity);
+        Assert.Equal("Sem pimenta", order.Items[0].Observation);
+        Assert.Equal("Carlos", order.EmployeeName);
+
+        await restaurant.ClearEmployeeLocalPinAsync(employee.Id);
+        Assert.Null(await restaurant.VerifyWaiterLocalPinAsync("0007", "1234"));
+    }
+
+    [Fact]
+    public async Task LocalWaiterCommandIsRejectedOutsideAuthorizedArea()
+    {
+        var restaurant = new SqliteRestaurantRepository(_database);
+        await restaurant.InitializeAsync();
+        var area = Assert.Single(await restaurant.GetAreasAsync());
+        var otherAreaId = await restaurant.SaveAreaAsync("Varanda");
+        await restaurant.SetTableCountAsync(otherAreaId, 3);
+        var otherTable = (await restaurant.GetTablesAsync(otherAreaId)).First();
+        var employee = new RestaurantEmployeeRecord(
+            Guid.NewGuid(), "Carlos", "Garçom", true, "0007", null, area.Id.ToString());
+        var menuItem = new RestaurantMenuItemRecord(Guid.NewGuid(), "Pastel", "Comidas", 9m, true);
+        await restaurant.SaveEmployeeAsync(employee);
+        await restaurant.SaveMenuItemAsync(menuItem);
+
+        var command = new WaiterCommandRecord(
+            Guid.NewGuid().ToString(),
+            "addItem",
+            otherAreaId.ToString(),
+            otherTable.Id.ToString(),
+            SqliteRestaurantRepository.CreateLocalWaiterUid(employee.Id),
+            menuItem.Id.ToString(),
+            1m,
+            "pending",
+            DateTimeOffset.UtcNow.ToString("O"));
+
+        var result = await restaurant.ProcessWaiterCommandAsync(command);
+        Assert.Equal("rejected", result.Status);
+        Assert.Contains("área", result.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Null(await restaurant.GetOpenOrderAsync(otherTable.Id));
+    }
+
+    [Fact]
+    public async Task LocalWaiterServerServesWaiterAppEndToEnd()
+    {
+        var restaurant = new SqliteRestaurantRepository(_database);
+        await restaurant.InitializeAsync();
+        var area = Assert.Single(await restaurant.GetAreasAsync());
+        var table = (await restaurant.GetTablesAsync(area.Id)).First();
+        var employee = new RestaurantEmployeeRecord(
+            Guid.NewGuid(), "Carlos", "Garçom", true, "0007", null, area.Id.ToString());
+        var menuItem = new RestaurantMenuItemRecord(Guid.NewGuid(), "Pastel", "Comidas", 9m, true);
+        await restaurant.SaveEmployeeAsync(employee);
+        await restaurant.SaveMenuItemAsync(menuItem);
+        await restaurant.SetEmployeeLocalPinAsync(employee.Id, "1234");
+
+        var port = 18080 + Random.Shared.Next(1000);
+        await using var server = new LocalWaiterServer(restaurant, "Loja Teste", port);
+        await server.StartAsync();
+        Assert.True(server.IsRunning);
+
+        using var http = new HttpClient { BaseAddress = new Uri($"http://localhost:{port}") };
+        var status = await http.GetFromJsonAsync<JsonElement>("/api/status");
+        Assert.Equal("Loja Teste", status.GetProperty("store").GetString());
+        Assert.Contains("SYSMR", await http.GetStringAsync("/"));
+
+        var badLogin = await http.PostAsJsonAsync("/api/login", new { waiterNumber = "0007", pin = "0000" });
+        Assert.Equal(HttpStatusCode.Unauthorized, badLogin.StatusCode);
+
+        var loginResponse = await http.PostAsJsonAsync("/api/login", new { waiterNumber = "0007", pin = "1234" });
+        var login = await loginResponse.Content.ReadFromJsonAsync<JsonElement>();
+        http.DefaultRequestHeaders.Add("X-Waiter-Token", login.GetProperty("token").GetString());
+
+        var areas = await http.GetFromJsonAsync<JsonElement>("/api/areas");
+        Assert.Equal(table.Number, areas[0].GetProperty("tables")[0].GetProperty("number").GetInt32());
+
+        var menu = await http.GetFromJsonAsync<JsonElement>("/api/menu");
+        Assert.Equal("Pastel", menu[0].GetProperty("name").GetString());
+
+        var commandResponse = await http.PostAsJsonAsync("/api/commands", new
+        {
+            type = "addItem",
+            areaId = area.Id,
+            tableId = table.Id,
+            menuItemId = menuItem.Id,
+            quantity = 2,
+            observation = "Sem pimenta"
+        });
+        var commandResult = await commandResponse.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal("applied", commandResult.GetProperty("status").GetString());
+
+        var order = await http.GetFromJsonAsync<JsonElement>($"/api/tables/{table.Id}/order");
+        Assert.Equal(2m, order.GetProperty("items")[0].GetProperty("quantity").GetDecimal());
+        Assert.Equal("Sem pimenta", order.GetProperty("items")[0].GetProperty("observation").GetString());
+
+        using var anonymous = new HttpClient { BaseAddress = new Uri($"http://localhost:{port}") };
+        Assert.Equal(HttpStatusCode.Unauthorized, (await anonymous.GetAsync("/api/menu")).StatusCode);
+    }
+
+    [Fact]
+    public async Task LocalMenuIncludesProductDescription()
+    {
+        var restaurant = new SqliteRestaurantRepository(_database);
+        await restaurant.InitializeAsync();
+        var area = Assert.Single(await restaurant.GetAreasAsync());
+        var employee = new RestaurantEmployeeRecord(Guid.NewGuid(), "Carlos", "Garçom", true, "0007", null, area.Id.ToString());
+        await restaurant.SaveEmployeeAsync(employee);
+        await restaurant.SaveMenuItemAsync(new RestaurantMenuItemRecord(
+            Guid.NewGuid(), "Pastel", "Comidas", 9m, true, Description: "Pastel recheado."));
+        await restaurant.SetEmployeeLocalPinAsync(employee.Id, "1234");
+        var port = 18080 + Random.Shared.Next(1000);
+        await using var server = new LocalWaiterServer(restaurant, "Loja Teste", port);
+        await server.StartAsync();
+        using var http = new HttpClient { BaseAddress = new Uri($"http://localhost:{port}") };
+        var loginResponse = await http.PostAsJsonAsync("/api/login", new { waiterNumber = "0007", pin = "1234" });
+        loginResponse.EnsureSuccessStatusCode();
+        var login = await loginResponse.Content.ReadFromJsonAsync<JsonElement>();
+        http.DefaultRequestHeaders.Add("X-Waiter-Token", login.GetProperty("token").GetString());
+        var menu = await http.GetFromJsonAsync<JsonElement>("/api/menu");
+        Assert.Equal("Pastel recheado.", menu[0].GetProperty("description").GetString());
+    }
+
+    [Fact]
+    public void EscPosBuilderEmitsNativeCommandsWithPortugueseAccents()
+    {
+        var bytes = new EscPosBuilder()
+            .AlignCenter().Bold(true).Line("PEDIDO DE COZINHA").Bold(false)
+            .DoubleSize(true).Line("05").DoubleSize(false)
+            .AlignLeft().WrappedLine("2x Pastel de queijo - Obs.: coração, açúcar e limão")
+            .Separator()
+            .Feed(3).Cut()
+            .Build();
+
+        // ESC @ (init) e ESC t 2 (code page PC850 para acentos)
+        Assert.Equal([0x1B, 0x40, 0x1B, 0x74, 0x02], bytes.Take(5).ToArray());
+        // Texto acentuado codificado em PC850: ç=0x87, ã=0xC6, é=0x82
+        var text = Encoding.GetEncoding(850).GetString(bytes);
+        Assert.Contains("COZINHA", text);
+        Assert.Contains("ç", text);
+        Assert.Contains("ã", text);
+        // Corte parcial GS V 66 3 no final
+        Assert.Equal([0x1D, 0x56, 0x42, 0x03], bytes.TakeLast(4).ToArray());
+    }
+
+    [Fact]
+    public void EscPosRasterLogoProducesPackedImageCommand()
+    {
+        var bytes = new EscPosBuilder().AlignLeft().RasterBitmap(8, 2, [0x80, 0x01]).Build();
+        Assert.Contains("1D763000010002008001", Convert.ToHexString(bytes));
+        Assert.Throws<ArgumentException>(() => new EscPosBuilder().RasterBitmap(8, 2, [0x80]));
+    }
+
+    [Fact]
+    public void EscPosBuilderWrapsLongItemNamesWithinRollWidth()
+    {
+        var lines = EscPosBuilder.Wrap(
+            "2x Porção de tilápia frita com limão e molho especial da casa",
+            EscPosBuilder.LineWidth80Mm);
+        Assert.True(lines.Count > 1);
+        Assert.All(lines, line => Assert.True(line.Length <= EscPosBuilder.LineWidth80Mm));
+        Assert.Equal("2x Porção de tilápia frita com limão e molho", lines[0]);
+    }
+
+    [Fact]
+    public void EscPosPrinterParsesNetworkTargets()
+    {
+        Assert.True(EscPosPrinter.TryParseNetworkTarget("192.168.0.50:9100", out var host, out var port));
+        Assert.Equal("192.168.0.50", host);
+        Assert.Equal(9100, port);
+        Assert.False(EscPosPrinter.TryParseNetworkTarget("MP-POS80 2", out _, out _));
+        Assert.False(EscPosPrinter.TryParseNetworkTarget("Padrão do Windows", out _, out _));
+        Assert.False(EscPosPrinter.TryParseNetworkTarget(null, out _, out _));
+    }
+
+    [Fact]
+    public void EscPosBuilderEmitsQrCodeCommands()
+    {
+        var bytes = new EscPosBuilder()
+            .AlignCenter()
+            .QrCode("http://192.168.0.10:8080")
+            .Cut()
+            .Build();
+
+        // Sequência GS ( k do QR Code: modelo 2, tamanho, correção M, dados, imprimir
+        var text = Convert.ToHexString(bytes);
+        Assert.Contains("1D286B040031413200", text);       // função 65: modelo 2
+        Assert.Contains("1D286B0300314306", text);         // função 67: módulo tamanho 6
+        Assert.Contains("1D286B0300314531", text);         // função 69: correção M
+        Assert.Contains("1D286B", text);                   // função 80: dados
+        Assert.Contains("1D286B0300315130", text);         // função 81: imprimir
+        Assert.Equal([0x1D, 0x56, 0x42, 0x03], bytes.TakeLast(4).ToArray()); // corte
+    }
+
+    [Fact]
+    public void EscPosBuilderEmitsQrCodeAsBitmap()
+    {
+        var bytes = new EscPosBuilder()
+            .AlignCenter()
+            .QrCodeBitmap("http://192.168.0.10:8080")
+            .Cut()
+            .Build();
+
+        // Cada faixa da imagem usa GS v 0 (1D 76 30 00) — raster bitmap
+        var text = Convert.ToHexString(bytes);
+        // Várias faixas (uma por linha da imagem)
+        var occurrences = text.Split("1D763000").Length - 1;
+        Assert.True(occurrences > 100, $"Esperava muitas faixas de bitmap, veio {occurrences}");
+        Assert.Equal([0x1D, 0x56, 0x42, 0x03], bytes.TakeLast(4).ToArray()); // corte
+    }
+
+    [Fact]
+    public async Task PrintBatchNumberIsSequentialAndSharedPerSubmission()
+    {
+        var restaurant = new SqliteRestaurantRepository(_database);
+        await restaurant.InitializeAsync();
+        var area = Assert.Single(await restaurant.GetAreasAsync());
+        var table = (await restaurant.GetTablesAsync(area.Id)).First();
+        var menuItem = new RestaurantMenuItemRecord(Guid.NewGuid(), "Pastel", "Comidas", 9m, true);
+        await restaurant.SaveMenuItemAsync(menuItem);
+
+        // Primeiro envio: dois itens de uma vez → mesmo número de lote
+        await restaurant.AddOrderItemAsync(table.Id, menuItem.Id, 1m);
+        await restaurant.AddOrderItemAsync(table.Id, menuItem.Id, 2m);
+        var firstBatch = Assert.Single(await restaurant.GetKitchenPrintBatchesAsync(failedOnly: false));
+        var firstNumber = await restaurant.AssignPrintBatchNumberAsync(
+            firstBatch.Items.Select(item => item.Id));
+        Assert.Equal(1, firstNumber);
+
+        // Itens já numerados não recebem número novo (reimpressão mantém o número)
+        var secondAssign = await restaurant.AssignPrintBatchNumberAsync(
+            firstBatch.Items.Select(item => item.Id));
+        Assert.Equal(1, secondAssign);
+        var reread = Assert.Single(await restaurant.GetKitchenPrintBatchesAsync(failedOnly: false));
+        Assert.Equal(1, reread.PrintBatchNumber);
+
+        // Segundo envio (outro item depois) → número novo
+        await restaurant.AddOrderItemAsync(table.Id, menuItem.Id, 3m);
+        var pending = await restaurant.GetKitchenPrintBatchesAsync(failedOnly: false);
+        var newItems = pending.SelectMany(batch => batch.Items)
+            .Where(item => !firstBatch.Items.Select(i => i.Id).Contains(item.Id))
+            .ToArray();
+        Assert.Single(newItems);
+        var secondNumber = await restaurant.AssignPrintBatchNumberAsync(newItems.Select(item => item.Id));
+        Assert.Equal(2, secondNumber);
+    }
+
+    [Fact]
+    public async Task PrintBatchNumberResetsOnlyAfterClosingCashSession()
+    {
+        var restaurant = new SqliteRestaurantRepository(_database);
+        await restaurant.InitializeAsync();
+        var area = Assert.Single(await restaurant.GetAreasAsync());
+        var table = (await restaurant.GetTablesAsync(area.Id)).First();
+        var item = new RestaurantMenuItemRecord(Guid.NewGuid(), "Pastel", "Comidas", 9m, true);
+        await restaurant.SaveMenuItemAsync(item);
+        await restaurant.OpenCashSessionAsync(0m);
+        await restaurant.AddOrderItemAsync(table.Id, item.Id, 1m);
+        var first = Assert.Single(await restaurant.GetKitchenPrintBatchesAsync(false));
+        Assert.Equal(1, await restaurant.AssignPrintBatchNumberAsync(first.Items.Select(line => line.Id)));
+        await using (var connection = _database.CreateConnection())
+        {
+            await connection.OpenAsync();
+            await using var oldCounter = connection.CreateCommand();
+            oldCounter.CommandText = "UPDATE AppSettings SET Value = '2000-01-01:1' WHERE Key = 'printBatch.counter';";
+            await oldCounter.ExecuteNonQueryAsync();
+        }
+        await restaurant.AddOrderItemAsync(table.Id, item.Id, 1m);
+        var next = Assert.Single((await restaurant.GetKitchenPrintBatchesAsync(false)).Where(batch => batch.PrintBatchNumber is null));
+        Assert.Equal(2, await restaurant.AssignPrintBatchNumberAsync(next.Items.Select(line => line.Id)));
+        await restaurant.PayOrderAsync(table.Id, PaymentMethod.Cash);
+        var session = (await restaurant.GetOpenCashSessionAsync())!;
+        await restaurant.CloseCashSessionAsync(session.Id, 18m);
+        await restaurant.OpenCashSessionAsync(0m);
+        await restaurant.AddOrderItemAsync(table.Id, item.Id, 1m);
+        var after = Assert.Single(await restaurant.GetKitchenPrintBatchesAsync(false));
+        Assert.Equal(1, await restaurant.AssignPrintBatchNumberAsync(after.Items.Select(line => line.Id)));
+    }
+
+    [Fact]
+    public void RestaurantMenuProjectionPublishesExactWebCapabilitiesAndSizes()
+    {
+        var sized = new RestaurantMenuItemRecord(Guid.NewGuid(), "Tilápia", "Porções", 40m, true, PriceM: 40m, PriceG: 55m, Description: "Filé de tilápia, sem espinho.");
+        var single = new RestaurantMenuItemRecord(Guid.NewGuid(), "Água", "Bebidas", 3m, true);
+        var json = JsonSerializer.Serialize(FirebaseStoreAccountClient.CreateRestaurantMenuProjection([sized, single]),
+            new JsonSerializerOptions(JsonSerializerDefaults.Web));
+        using var document = JsonDocument.Parse(json);
+        var root = document.RootElement;
+        Assert.True(root.GetProperty("capabilities").GetProperty("submitOrder").GetBoolean());
+        var items = root.GetProperty("items");
+        Assert.Equal("Filé de tilápia, sem espinho.", items.GetProperty(sized.Id.ToString()).GetProperty("description").GetString());
+        var sizes = items.GetProperty(sized.Id.ToString()).GetProperty("sizes");
+        Assert.Equal(40m, sizes.GetProperty("M").GetDecimal());
+        Assert.Equal(55m, sizes.GetProperty("G").GetDecimal());
+        Assert.False(items.GetProperty(single.Id.ToString()).TryGetProperty("sizes", out _));
+    }
+
+    [Fact]
+    public async Task SubmitOrderAppliesAtomicallyWithSizesOptionsAndSharedPrintNumber()
+    {
+        var restaurant = new SqliteRestaurantRepository(_database);
+        await restaurant.InitializeAsync();
+        var area = Assert.Single(await restaurant.GetAreasAsync());
+        var table = (await restaurant.GetTablesAsync(area.Id)).First();
+        var employee = new RestaurantEmployeeRecord(
+            Guid.NewGuid(), "Joana", "Garçom", true, "0042", "firebase-waiter-uid", area.Id.ToString());
+        var option = new RestaurantMenuOptionRecord(Guid.NewGuid(), "Gelo e limão", 1.50m);
+        var fish = new RestaurantMenuItemRecord(Guid.NewGuid(), "Tilápia", "Porções", 40m, true, PriceM: 40m, PriceG: 55m);
+        var drink = new RestaurantMenuItemRecord(Guid.NewGuid(), "Bebida", "Bebidas", 6m, true, Options: [option], PrintTarget: "bar");
+        await restaurant.SaveEmployeeAsync(employee);
+        await restaurant.SaveMenuItemAsync(fish);
+        await restaurant.SaveMenuItemAsync(drink);
+        var commandId = Guid.NewGuid().ToString();
+        var json = JsonSerializer.Serialize(new
+        {
+            id = commandId, type = "submitOrder", employeeUid = employee.FirebaseUid,
+            areaId = area.Id, tableId = table.Id, status = "pending", createdAt = "2026-11-12T12:00:00.000Z", customerName = "Ana",
+            items = new object[]
+            {
+                new { menuItemId = fish.Id, size = "M", quantity = 1, observation = "Bem frita" },
+                new { menuItemId = drink.Id, quantity = 2, options = new[] { new { optionId = option.Id, quantity = 1, extraPrice = 0m } } }
+            }
+        });
+        var command = JsonSerializer.Deserialize<WaiterCommandRecord>(json, new JsonSerializerOptions(JsonSerializerDefaults.Web))!;
+        var result = await restaurant.ProcessWaiterCommandAsync(command);
+        Assert.Equal("applied", result.Status);
+        Assert.Equal(result, await restaurant.ProcessWaiterCommandAsync(command));
+        var order = (await restaurant.GetOpenOrderAsync(table.Id))!;
+        Assert.Equal("Ana", order.CustomerName);
+        Assert.Equal("Joana", order.EmployeeName);
+        var savedTable = Assert.Single((await restaurant.GetTablesAsync(area.Id)).Where(value => value.Id == table.Id));
+        Assert.Equal("Ana", savedTable.CustomerName);
+        Assert.Equal("Joana", savedTable.EmployeeName);
+        Assert.Equal(3, order.Items.Count);
+        Assert.Equal(53.50m, order.Subtotal);
+        Assert.Contains(order.Items, item => item.Name == "Tilápia (M)" && item.Observation == "Bem frita" && item.UnitPrice == 40m);
+        var batch = Assert.Single(await restaurant.GetKitchenPrintBatchesAsync(false));
+        Assert.NotNull(batch.PrintBatchNumber);
+        Assert.Equal("Ana", batch.CustomerName);
+        Assert.Single(batch.Items.Where(item => item.PrintTarget == "kitchen"));
+        Assert.Equal(2, batch.Items.Count(item => item.PrintTarget == "bar"));
+
+        var anotherEmployee = new RestaurantEmployeeRecord(
+            Guid.NewGuid(), "Pedro", "Garçom", true, "0043", "firebase-waiter-2", area.Id.ToString());
+        await restaurant.SaveEmployeeAsync(anotherEmployee);
+        var another = command with { Id = Guid.NewGuid().ToString(), EmployeeUid = anotherEmployee.FirebaseUid,
+            CustomerName = "Outro", Items = [new(fish.Id.ToString(), 1, "G")] };
+        Assert.Equal("applied", (await restaurant.ProcessWaiterCommandAsync(another)).Status);
+        var batches = await restaurant.GetKitchenPrintBatchesAsync(false);
+        Assert.Equal(2, batches.Count);
+        Assert.Contains(batches, value => value.EmployeeName == "Joana");
+        Assert.Contains(batches, value => value.EmployeeName == "Pedro");
+        Assert.Equal("Ana", (await restaurant.GetOpenOrderAsync(table.Id))!.CustomerName);
+        Assert.Equal("Joana", (await restaurant.GetOpenOrderAsync(table.Id))!.EmployeeName);
+        Assert.NotEqual(batches[0].PrintBatchNumber, batches[1].PrintBatchNumber);
+        Assert.Contains((await restaurant.GetOpenOrderAsync(table.Id))!.Items, item => item.Name == "Tilápia (G)" && item.UnitPrice == 55m);
+        await restaurant.MarkKitchenPrintAsync(batch.Items.Where(item => item.PrintTarget == "kitchen").Select(item => item.Id), true);
+        await restaurant.MarkKitchenPrintAsync(batch.Items.Where(item => item.PrintTarget == "bar").Select(item => item.Id), false, "Falha de impressão");
+        var failed = Assert.Single(await restaurant.GetKitchenPrintBatchesAsync(true));
+        Assert.Equal(batch.PrintBatchNumber, failed.PrintBatchNumber);
+        Assert.All(failed.Items, item => Assert.Equal("bar", item.PrintTarget));
+    }
+
+    [Fact]
+    public async Task SubmitOrderRejectsWholeTransactionWhenOneItemIsInvalid()
+    {
+        var restaurant = new SqliteRestaurantRepository(_database);
+        await restaurant.InitializeAsync();
+        var area = Assert.Single(await restaurant.GetAreasAsync());
+        var table = (await restaurant.GetTablesAsync(area.Id)).First();
+        var employee = new RestaurantEmployeeRecord(Guid.NewGuid(), "Joana", "Garçom", true, "0042", "uid", area.Id.ToString());
+        var product = await _products.FindByScaleCodeAsync("01234");
+        Assert.NotNull(product);
+        var item = new RestaurantMenuItemRecord(Guid.NewGuid(), "Tilápia", "Porções", 40m, true, product.Id, 1m, PriceM: 40m, PriceG: 55m);
+        await restaurant.SaveEmployeeAsync(employee);
+        await restaurant.SaveMenuItemAsync(item);
+        var command = new WaiterCommandRecord(Guid.NewGuid().ToString(), "submitOrder", area.Id.ToString(), table.Id.ToString(),
+            employee.FirebaseUid, null, 0m, "pending", DateTimeOffset.UtcNow.ToString("O"),
+            Items: [new(item.Id.ToString(), 1m, "M"), new(item.Id.ToString(), 1m, "X")]);
+        var result = await restaurant.ProcessWaiterCommandAsync(command);
+        Assert.Equal("rejected", result.Status);
+        Assert.Equal(result, await restaurant.ProcessWaiterCommandAsync(command));
+        Assert.Null(await restaurant.GetOpenOrderAsync(table.Id));
+        Assert.Equal(30m, (await _products.FindByScaleCodeAsync("01234"))!.Stock);
+        Assert.Empty(await restaurant.GetKitchenPrintBatchesAsync(false));
+    }
+
+    [Fact]
+    public async Task PesqueiroCatalogReplacesActiveMenuAndPreservesHistory()
+    {
+        var restaurant = new SqliteRestaurantRepository(_database);
+        await restaurant.InitializeAsync();
+        var area = Assert.Single(await restaurant.GetAreasAsync());
+        var table = (await restaurant.GetTablesAsync(area.Id)).First();
+        var old = new RestaurantMenuItemRecord(Guid.NewGuid(), "Produto antigo", "Teste", 10m, true);
+        await restaurant.SaveMenuItemAsync(old);
+        await restaurant.AddOrderItemAsync(table.Id, old.Id, 1m);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => restaurant.ReplaceWithPesqueiroMenuAsync());
+        Assert.Contains(await restaurant.GetMenuItemsAsync(true), item => item.Id == old.Id);
+        await restaurant.RemoveOrderItemAsync(table.Id, Assert.Single((await restaurant.GetOpenOrderAsync(table.Id))!.Items).Id);
+        await restaurant.ReplaceWithPesqueiroMenuAsync();
+        var items = await restaurant.GetMenuItemsAsync(true);
+        Assert.DoesNotContain(items, item => item.Id == old.Id);
+        var fish = Assert.Single(items.Where(item => item.Name == "Tilápia"));
+        Assert.Equal(40m, fish.PriceM);
+        Assert.Equal(55m, fish.PriceG);
+        Assert.Equal("kitchen", fish.PrintTarget);
+        Assert.Equal("Filé de tilápia, sem espinho.", fish.Description);
+        Assert.Equal("Coberta com cheddar e bacon.", Assert.Single(items.Where(item => item.Name == "Batata especial")).Description);
+        Assert.Equal("", Assert.Single(items.Where(item => item.Name == "Arroz")).Description);
+        Assert.Equal("bar", Assert.Single(items.Where(item => item.Name == "Original lata")).PrintTarget);
+        Assert.Equal(7m, Assert.Single(items.Where(item => item.Name == "Brahma Zero lata")).Price);
+        Assert.Single(items.Where(item => item.Name == "Pimenta recheada - unidade"));
+        Assert.Single(items.Where(item => item.Name == "Pimenta recheada - porção G"));
+        Assert.Contains(await new SqliteSyncOutboxRepository(_database).GetPendingAsync(), x => x.Entity == "menu-replaced");
+        await restaurant.ReplaceWithPesqueiroMenuAsync();
+        Assert.Equal(items.Count, (await restaurant.GetMenuItemsAsync(true)).Count);
+    }
+
+    [Fact]
+    public async Task PesqueiroDescriptionUpdatePreservesExistingMenuData()
+    {
+        var restaurant = new SqliteRestaurantRepository(_database);
+        await restaurant.InitializeAsync();
+        var option = new RestaurantMenuOptionRecord(Guid.NewGuid(), "Extra", 2m);
+        var fish = new RestaurantMenuItemRecord(Guid.NewGuid(), "Tilápia", "Porções", 99m, true,
+            Options: [option], PrintTarget: "bar", PriceM: 99m, PriceG: 120m);
+        var custom = new RestaurantMenuItemRecord(Guid.NewGuid(), "Pacu", "Porções", 42m, true,
+            Description: "Descrição personalizada.");
+        var other = new RestaurantMenuItemRecord(Guid.NewGuid(), "Misto", "Outra categoria", 50m, true);
+        await restaurant.SaveMenuItemAsync(fish);
+        await restaurant.SaveMenuItemAsync(custom);
+        await restaurant.SaveMenuItemAsync(other);
+        Assert.Equal(1, await restaurant.UpdatePesqueiroDescriptionsAsync());
+        var saved = await restaurant.GetMenuItemsAsync();
+        var updated = Assert.Single(saved.Where(item => item.Id == fish.Id));
+        Assert.Equal("Filé de tilápia, sem espinho.", updated.Description);
+        Assert.Equal(99m, updated.Price);
+        Assert.Equal(120m, updated.PriceG);
+        Assert.Equal("bar", updated.PrintTarget);
+        Assert.Equal(option, Assert.Single(updated.Options!));
+        Assert.Equal(custom.Description, Assert.Single(saved.Where(item => item.Id == custom.Id)).Description);
+        Assert.Equal("", Assert.Single(saved.Where(item => item.Id == other.Id)).Description);
+        Assert.Equal(0, await restaurant.UpdatePesqueiroDescriptionsAsync());
+        Assert.Contains(await new SqliteSyncOutboxRepository(_database).GetPendingAsync(), x => x.Entity == "menu-replaced");
+        await restaurant.SaveMenuItemAsync(updated with { Price = 100m, Options = null });
+        Assert.Equal(updated.Description, Assert.Single((await restaurant.GetMenuItemsAsync()).Where(item => item.Id == fish.Id)).Description);
+        await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() =>
+            restaurant.SaveMenuItemAsync(updated with { Description = new string('a', 501) }));
+    }
+
+    [Fact]
+    public async Task MenuDescriptionMigrationPreservesExistingProducts()
+    {
+        var restaurant = new SqliteRestaurantRepository(_database);
+        var item = new RestaurantMenuItemRecord(Guid.NewGuid(), "Tilápia", "Porções", 40m, true, PriceM: 40m, PriceG: 55m);
+        await restaurant.SaveMenuItemAsync(item);
+        await using (var connection = _database.CreateConnection())
+        {
+            await connection.OpenAsync();
+            await using var command = connection.CreateCommand();
+            command.CommandText = "ALTER TABLE RestaurantMenuItems DROP COLUMN Description;";
+            await command.ExecuteNonQueryAsync();
+        }
+        await _database.InitializeAsync();
+        var saved = Assert.Single((await restaurant.GetMenuItemsAsync()).Where(value => value.Id == item.Id));
+        Assert.Equal("", saved.Description);
+        Assert.Equal(40m, saved.PriceM);
+        Assert.Equal(55m, saved.PriceG);
+        Assert.Equal(1, await restaurant.UpdatePesqueiroDescriptionsAsync());
+        Assert.Equal("Filé de tilápia, sem espinho.",
+            Assert.Single((await restaurant.GetMenuItemsAsync()).Where(value => value.Id == item.Id)).Description);
+    }
+
+    [Fact]
+    public async Task MenuItemOptionsSplitOrderLinesWithEditableExtraPrice()
+    {
+        var restaurant = new SqliteRestaurantRepository(_database);
+        await restaurant.InitializeAsync();
+        var area = Assert.Single(await restaurant.GetAreasAsync());
+        var table = (await restaurant.GetTablesAsync(area.Id)).First();
+        var employee = new RestaurantEmployeeRecord(
+            Guid.NewGuid(), "Joana", "Garçom", true, "0042", "firebase-waiter-uid", area.Id.ToString());
+        var lemon = new RestaurantMenuOptionRecord(Guid.NewGuid(), "Gelo e limão", 1.50m);
+        var menuItem = new RestaurantMenuItemRecord(
+            Guid.NewGuid(), "Refrigerante", "Bebidas", 6m, true,
+            Options: [new RestaurantMenuOptionRecord(Guid.NewGuid(), "Gelo", 0m), lemon]);
+        await restaurant.SaveEmployeeAsync(employee);
+        await restaurant.SaveMenuItemAsync(menuItem);
+        var saved = Assert.Single(await restaurant.GetMenuItemsAsync());
+        Assert.Equal(2, saved.Options!.Count);
+
+        await restaurant.AddOrderItemAsync(
+            table.Id, menuItem.Id, 4m, null, null,
+            [new RestaurantOrderSelection(lemon.Id, 2m, 2m)]);
+        var order = (await restaurant.GetOpenOrderAsync(table.Id))!;
+        Assert.Equal(2, order.Items.Count);
+        Assert.Equal(4m * 6m + 2m * 2m, order.Items.Sum(item => item.Quantity * item.UnitPrice));
+        Assert.Contains(order.Items, item => item.Name.Contains("Gelo e limão") && item.UnitPrice == 8m);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => restaurant.AddOrderItemAsync(
+            table.Id, menuItem.Id, 1m, null, null,
+            [new RestaurantOrderSelection(lemon.Id, 2m)]));
+
+        var command = new WaiterCommandRecord(
+            Guid.NewGuid().ToString(), "addItem", area.Id.ToString(), table.Id.ToString(),
+            employee.FirebaseUid, menuItem.Id.ToString(), 2m, "pending",
+            DateTimeOffset.UtcNow.ToString("O"),
+            Options: [new WaiterCommandOption(lemon.Id.ToString(), 1m)]);
+        Assert.Equal("applied", (await restaurant.ProcessWaiterCommandAsync(command)).Status);
+        var after = (await restaurant.GetOpenOrderAsync(table.Id))!;
+        Assert.Equal(4, after.Items.Count);
+    }
+
+    [Fact]
+    public async Task KitchenPrintTracksPendingPrintedAndFailedItems()
+    {
+        var restaurant = new SqliteRestaurantRepository(_database);
+        await restaurant.InitializeAsync();
+        var area = Assert.Single(await restaurant.GetAreasAsync());
+        var table = (await restaurant.GetTablesAsync(area.Id)).First();
+        var menuItem = new RestaurantMenuItemRecord(Guid.NewGuid(), "Pastel", "Comidas", 9m, true);
+        await restaurant.SaveMenuItemAsync(menuItem);
+
+        await restaurant.AddOrderItemAsync(table.Id, menuItem.Id, 2m);
+        var batch = Assert.Single(await restaurant.GetKitchenPrintBatchesAsync(failedOnly: false));
+        Assert.Equal(table.Number, batch.TableNumber);
+        var ids = batch.Items.Select(item => item.Id).ToArray();
+
+        await restaurant.MarkKitchenPrintAsync(ids, false, "sem papel");
+        Assert.Empty(await restaurant.GetKitchenPrintBatchesAsync(failedOnly: false) is { Count: > 0 } all
+            ? all.Where(b => b.LastError is null) : []);
+        var failed = Assert.Single(await restaurant.GetKitchenPrintBatchesAsync(failedOnly: true));
+        Assert.Equal("sem papel", failed.LastError);
+
+        await restaurant.MarkKitchenPrintAsync(ids, true);
+        Assert.Empty(await restaurant.GetKitchenPrintBatchesAsync(failedOnly: false));
+        Assert.Empty(await restaurant.GetKitchenPrintBatchesAsync(failedOnly: true));
+
+        await restaurant.AddOrderItemAsync(table.Id, menuItem.Id, 1m);
+        var next = Assert.Single(await restaurant.GetUnprintedKitchenBatchesForTableAsync(table.Id));
+        Assert.Single(next.Items);
+        await restaurant.MarkAllKitchenItemsPrintedAsync();
+        Assert.Empty(await restaurant.GetKitchenPrintBatchesAsync(failedOnly: false));
+    }
+
+    [Fact]
+    public async Task DailyOrderNumberIncrementsAndResetsAfterCashClose()
+    {
+        var restaurant = new SqliteRestaurantRepository(_database);
+        await restaurant.InitializeAsync();
+        var area = Assert.Single(await restaurant.GetAreasAsync());
+        var tables = await restaurant.GetTablesAsync(area.Id);
+        var menuItem = new RestaurantMenuItemRecord(Guid.NewGuid(), "Pastel", "Comidas", 9m, true);
+        await restaurant.SaveMenuItemAsync(menuItem);
+
+        await restaurant.AddOrderItemAsync(tables[0].Id, menuItem.Id, 1m);
+        await restaurant.AddOrderItemAsync(tables[1].Id, menuItem.Id, 1m);
+        Assert.Equal(1, (await restaurant.GetOpenOrderAsync(tables[0].Id))!.DailyNumber);
+        Assert.Equal(2, (await restaurant.GetOpenOrderAsync(tables[1].Id))!.DailyNumber);
+
+        await restaurant.OpenCashSessionAsync(100m);
+        await restaurant.PayOrderAsync(tables[0].Id, PaymentMethod.Cash);
+        await restaurant.PayOrderAsync(tables[1].Id, PaymentMethod.Cash);
+        var session = (await restaurant.GetOpenCashSessionAsync())!;
+        await restaurant.CloseCashSessionAsync(session.Id, 300m);
+
+        await restaurant.AddOrderItemAsync(tables[0].Id, menuItem.Id, 1m);
+        Assert.Equal(1, (await restaurant.GetOpenOrderAsync(tables[0].Id))!.DailyNumber);
+    }
+
+    [Fact]
+    public void DeriveFunctionUrlReplacesLastSegment()
+    {
+        Assert.Equal(
+            "https://resolvestorelogin-wh5xfwpmcq-uc.a.run.app",
+            FirebaseStoreAccountClient.DeriveFunctionUrl(
+                "https://provisionstore-wh5xfwpmcq-uc.a.run.app",
+                "resolveStoreLogin"));
+        Assert.Equal(
+            "https://updatestorecontactemail-wh5xfwpmcq-uc.a.run.app",
+            FirebaseStoreAccountClient.DeriveFunctionUrl(
+                "https://provisionstore-wh5xfwpmcq-uc.a.run.app/",
+                "updateStoreContactEmail"));
+        Assert.Throws<InvalidOperationException>(() =>
+            FirebaseStoreAccountClient.DeriveFunctionUrl("http://insecure/provisionStore", "resolveStoreLogin"));
+    }
+
+    [Fact]
+    public async Task WaiterCommandsCanUpdateObservationAndRemoveOrderItemsIdempotently()
+    {
+        var restaurant = new SqliteRestaurantRepository(_database);
+        await restaurant.InitializeAsync();
+        var area = Assert.Single(await restaurant.GetAreasAsync());
+        var table = (await restaurant.GetTablesAsync(area.Id)).First();
+        var employee = new RestaurantEmployeeRecord(
+            Guid.NewGuid(), "Joana", "Garçom", true, "0042", "firebase-waiter-uid", area.Id.ToString());
+        var menuItem = new RestaurantMenuItemRecord(Guid.NewGuid(), "Suco", "Bebidas", 12.50m, true);
+        await restaurant.SaveEmployeeAsync(employee);
+        await restaurant.SaveMenuItemAsync(menuItem);
+
+        var addCommand = new WaiterCommandRecord(
+            Guid.NewGuid().ToString(),
+            "addItem",
+            area.Id.ToString(),
+            table.Id.ToString(),
+            employee.FirebaseUid,
+            menuItem.Id.ToString(),
+            1m,
+            "pending",
+            DateTimeOffset.UtcNow.ToString("O"));
+        var addResult = await restaurant.ProcessWaiterCommandAsync(addCommand);
+        Assert.Equal("applied", addResult.Status);
+        var item = Assert.Single((await restaurant.GetOpenOrderAsync(table.Id))!.Items);
+
+        var updateObservation = new WaiterCommandRecord(
+            Guid.NewGuid().ToString(),
+            "updateObservation",
+            area.Id.ToString(),
+            table.Id.ToString(),
+            employee.FirebaseUid,
+            null,
+            0m,
+            "pending",
+            DateTimeOffset.UtcNow.ToString("O"),
+            "Sem gelo",
+            item.Id.ToString());
+        var updateResult = await restaurant.ProcessWaiterCommandAsync(updateObservation);
+        Assert.Equal("applied", updateResult.Status);
+        Assert.Equal(updateResult, await restaurant.ProcessWaiterCommandAsync(updateObservation));
+        Assert.Equal("Sem gelo", Assert.Single((await restaurant.GetOpenOrderAsync(table.Id))!.Items).Observation);
+
+        var clearObservation = updateObservation with
+        {
+            Id = Guid.NewGuid().ToString(),
+            Observation = string.Empty,
+            CreatedAt = DateTimeOffset.UtcNow.ToString("O")
+        };
+        Assert.Equal("applied", (await restaurant.ProcessWaiterCommandAsync(clearObservation)).Status);
+        Assert.Equal(string.Empty, Assert.Single((await restaurant.GetOpenOrderAsync(table.Id))!.Items).Observation);
+
+        var removeItem = new WaiterCommandRecord(
+            Guid.NewGuid().ToString(),
+            "removeItem",
+            area.Id.ToString(),
+            table.Id.ToString(),
+            employee.FirebaseUid,
+            null,
+            0m,
+            "pending",
+            DateTimeOffset.UtcNow.ToString("O"),
+            null,
+            item.Id.ToString());
+        var removeResult = await restaurant.ProcessWaiterCommandAsync(removeItem);
+        Assert.Equal("applied", removeResult.Status);
+        Assert.Equal(removeResult, await restaurant.ProcessWaiterCommandAsync(removeItem));
+        Assert.Null(await restaurant.GetOpenOrderAsync(table.Id));
+    }
+
+    [Fact]
+    public async Task UnitWaiterCommandsSplitAndRemoveOneAndQueueNoticesIdempotently()
+    {
+        var restaurant = new SqliteRestaurantRepository(_database);
+        await restaurant.InitializeAsync();
+        var area = Assert.Single(await restaurant.GetAreasAsync());
+        var table = (await restaurant.GetTablesAsync(area.Id)).First();
+        var employee = new RestaurantEmployeeRecord(
+            Guid.NewGuid(), "Joana", "Garçom", true, "0042", "firebase-waiter-uid", area.Id.ToString());
+        var menu = new RestaurantMenuItemRecord(Guid.NewGuid(), "Suco", "Bebidas", 12m, true, PrintTarget: "bar");
+        await restaurant.SaveEmployeeAsync(employee);
+        await restaurant.SaveMenuItemAsync(menu);
+        var add = new WaiterCommandRecord(Guid.NewGuid().ToString(), "addItem", area.Id.ToString(), table.Id.ToString(),
+            employee.FirebaseUid, menu.Id.ToString(), 3m, "pending", DateTimeOffset.UtcNow.ToString("O"));
+        Assert.Equal("applied", (await restaurant.ProcessWaiterCommandAsync(add)).Status);
+        var original = Assert.Single((await restaurant.GetOpenOrderAsync(table.Id))!.Items);
+        var edit = new WaiterCommandRecord(Guid.NewGuid().ToString(), "updateOneObservation", area.Id.ToString(),
+            table.Id.ToString(), employee.FirebaseUid, null, 0m, "pending", DateTimeOffset.UtcNow.ToString("O"),
+            "Sem gelo", original.Id.ToString());
+        Assert.Equal("rejected", (await restaurant.ProcessWaiterCommandAsync(edit)).Status);
+        Assert.Empty(await restaurant.GetItemChangeNoticesAsync(false));
+        await restaurant.MarkKitchenPrintAsync([original.Id], true);
+        edit = edit with { Id = Guid.NewGuid().ToString() };
+        Assert.Equal("rejected", (await restaurant.ProcessWaiterCommandAsync(edit)).Status);
+        await restaurant.MarkKitchenPrintAsync([original.Id], true, printTarget: "bar");
+        await restaurant.SaveMenuItemAsync(menu with { PrintTarget = "kitchen" });
+        edit = edit with { Id = Guid.NewGuid().ToString() };
+        var applied = await restaurant.ProcessWaiterCommandAsync(edit);
+        Assert.Equal("applied", applied.Status);
+        Assert.Equal(applied, await restaurant.ProcessWaiterCommandAsync(edit));
+        var order = (await restaurant.GetOpenOrderAsync(table.Id))!;
+        Assert.Equal(2, order.Items.Count);
+        Assert.Contains(order.Items, item => item.Id == original.Id && item.Quantity == 2m);
+        Assert.Contains(order.Items, item => item.Quantity == 1m && item.Observation == "Sem gelo");
+        Assert.Equal(36m, order.Subtotal);
+        var notice = Assert.Single(await restaurant.GetItemChangeNoticesAsync(false));
+        Assert.Equal("bar", notice.PrintTarget);
+        Assert.Equal("observation", notice.Action);
+        Assert.Equal("Sem gelo", notice.NewObservation);
+        await restaurant.MarkItemChangeNoticeAsync(notice.CommandId, false, "sem papel");
+        Assert.Empty(await restaurant.GetItemChangeNoticesAsync(false));
+        Assert.Equal("sem papel", Assert.Single(await restaurant.GetItemChangeNoticesAsync(true)).Error);
+        await restaurant.MarkItemChangeNoticeAsync(notice.CommandId, true);
+        Assert.Empty(await restaurant.GetItemChangeNoticesAsync(true));
+        var remove = edit with { Id = Guid.NewGuid().ToString(), Type = "removeOne", Observation = null };
+        var removed = await restaurant.ProcessWaiterCommandAsync(remove);
+        Assert.Equal("applied", removed.Status);
+        Assert.Equal(removed, await restaurant.ProcessWaiterCommandAsync(remove));
+        order = (await restaurant.GetOpenOrderAsync(table.Id))!;
+        Assert.Equal(2m, order.Items.Sum(item => item.Quantity));
+        Assert.Equal(24m, order.Subtotal);
+        Assert.Equal("remove", Assert.Single(await restaurant.GetItemChangeNoticesAsync(false)).Action);
+    }
+
+    [Fact]
+    public async Task UnitWaiterCommandsProtectStockFractionalItemsAndPartialPayments()
+    {
+        var restaurant = new SqliteRestaurantRepository(_database);
+        await restaurant.InitializeAsync();
+        var area = Assert.Single(await restaurant.GetAreasAsync());
+        var table = (await restaurant.GetTablesAsync(area.Id)).First();
+        var employee = new RestaurantEmployeeRecord(
+            Guid.NewGuid(), "Joana", "Garçom", true, "0042", "firebase-waiter-uid", area.Id.ToString());
+        var stock = (await _products.FindByScaleCodeAsync("01234"))!;
+        var menu = new RestaurantMenuItemRecord(Guid.NewGuid(), "Porção", "Porções", 20m, true, stock.Id, 0.5m);
+        await restaurant.SaveEmployeeAsync(employee);
+        await restaurant.SaveMenuItemAsync(menu);
+        await restaurant.AddOrderItemAsync(table.Id, menu.Id, 3m, employee.Id);
+        var item = Assert.Single((await restaurant.GetOpenOrderAsync(table.Id))!.Items);
+        Assert.Equal(28.5m, (await _products.FindByScaleCodeAsync("01234"))!.Stock);
+        await restaurant.MarkKitchenPrintAsync([item.Id], true, printTarget: "kitchen");
+        var remove = new WaiterCommandRecord(Guid.NewGuid().ToString(), "removeOne", area.Id.ToString(), table.Id.ToString(),
+            employee.FirebaseUid, null, 0m, "pending", DateTimeOffset.UtcNow.ToString("O"), OrderItemId: item.Id.ToString());
+        Assert.Equal("applied", (await restaurant.ProcessWaiterCommandAsync(remove)).Status);
+        Assert.Equal(29m, (await _products.FindByScaleCodeAsync("01234"))!.Stock);
+        Assert.Equal(2m, Assert.Single((await restaurant.GetOpenOrderAsync(table.Id))!.Items).Quantity);
+        await restaurant.OpenCashSessionAsync(0m);
+        await restaurant.PayOrderAsync(table.Id, PaymentMethod.Pix, 5m, false);
+        remove = remove with { Id = Guid.NewGuid().ToString() };
+        Assert.Equal("rejected", (await restaurant.ProcessWaiterCommandAsync(remove)).Status);
+        var edit = remove with { Id = Guid.NewGuid().ToString(), Type = "updateOneObservation", Observation = "Sem sal" };
+        Assert.Equal("rejected", (await restaurant.ProcessWaiterCommandAsync(edit)).Status);
+        Assert.Equal(29m, (await _products.FindByScaleCodeAsync("01234"))!.Stock);
+        Assert.Single(await restaurant.GetItemChangeNoticesAsync(false));
+
+        var other = (await restaurant.GetTablesAsync(area.Id)).Skip(1).First();
+        await restaurant.AddOrderItemAsync(other.Id, menu.Id, 0.5m, employee.Id);
+        var fractional = Assert.Single((await restaurant.GetOpenOrderAsync(other.Id))!.Items);
+        await restaurant.MarkKitchenPrintAsync([fractional.Id], true, printTarget: "kitchen");
+        remove = remove with { Id = Guid.NewGuid().ToString(), TableId = other.Id.ToString(), OrderItemId = fractional.Id.ToString() };
+        Assert.Equal("rejected", (await restaurant.ProcessWaiterCommandAsync(remove)).Status);
+        edit = remove with { Id = Guid.NewGuid().ToString(), Type = "updateOneObservation", Observation = "Sem sal" };
+        Assert.Equal("rejected", (await restaurant.ProcessWaiterCommandAsync(edit)).Status);
+        Assert.Equal(0.5m, Assert.Single((await restaurant.GetOpenOrderAsync(other.Id))!.Items).Quantity);
+        Assert.Single(await restaurant.GetItemChangeNoticesAsync(false));
+    }
+
+    [Fact]
+    public async Task DesktopDisplayGroupsOnlyIdenticalItemsWithoutObservationsAndPreservesBatches()
+    {
+        var restaurant = new SqliteRestaurantRepository(_database);
+        await restaurant.InitializeAsync();
+        var area = Assert.Single(await restaurant.GetAreasAsync());
+        var table = (await restaurant.GetTablesAsync(area.Id)).First();
+        var employee = new RestaurantEmployeeRecord(
+            Guid.NewGuid(), "Joana", "Garçom", true, "0042", "firebase-waiter-uid", area.Id.ToString());
+        var menu = new RestaurantMenuItemRecord(Guid.NewGuid(), "Peixe", "Porções", 20m, true, PriceM: 20m, PriceG: 30m);
+        await restaurant.SaveEmployeeAsync(employee);
+        await restaurant.SaveMenuItemAsync(menu);
+        var command = new WaiterCommandRecord(Guid.NewGuid().ToString(), "submitOrder", area.Id.ToString(), table.Id.ToString(),
+            employee.FirebaseUid, null, 0m, "pending", DateTimeOffset.UtcNow.ToString("O"),
+            Items: [new WaiterCommandItem(menu.Id.ToString(), 1, "M")]);
+        Assert.Equal("applied", (await restaurant.ProcessWaiterCommandAsync(command)).Status);
+        Assert.Equal("applied", (await restaurant.ProcessWaiterCommandAsync(command with { Id = Guid.NewGuid().ToString() })).Status);
+        Assert.Equal("applied", (await restaurant.ProcessWaiterCommandAsync(command with
+        {
+            Id = Guid.NewGuid().ToString(),
+            Items = [new WaiterCommandItem(menu.Id.ToString(), 1, "G"), new WaiterCommandItem(menu.Id.ToString(), 1, "M", "Sem sal")]
+        })).Status);
+        var order = (await restaurant.GetOpenOrderAsync(table.Id))!;
+        var groups = RestaurantOrderDisplayGroup.Create(order.Items);
+        Assert.Equal(3, groups.Count);
+        Assert.Equal(2m, groups[0].Quantity);
+        Assert.Equal(40m, groups[0].Total);
+        Assert.Equal(2, groups[0].Items.Select(item => item.Id).Distinct().Count());
+        Assert.Equal("Peixe (G)", groups[1].Name);
+        Assert.Equal("Sem sal", groups[2].Observation);
+        Assert.Equal(3, (await restaurant.GetKitchenPrintBatchesAsync(false)).Count);
+        var legacy = order.Items[0] with { Id = Guid.NewGuid(), VariantKey = null };
+        Assert.Equal(2, RestaurantOrderDisplayGroup.Create([legacy, legacy with { Id = Guid.NewGuid() }]).Count);
     }
 
     [Fact]

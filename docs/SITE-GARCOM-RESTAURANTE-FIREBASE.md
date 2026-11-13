@@ -14,8 +14,8 @@ Esta integração exige trabalho também no SYSMR desktop. A versão atual:
 - publica o snapshot do cardápio da loja Restaurante em `clients/{uid}/branches/restaurant/restaurantLive/menu`, sem compartilhar o catálogo com outras lojas;
 - publica áreas e mesas em `clients/{uid}/branches/restaurant/restaurantLive/areas`, preservando os IDs estáveis do SQLite e sincronizando mudanças de área/quantidade de mesas;
 - desativa áreas sem apagar o histórico; uma área com comanda aberta não pode ser desativada;
-- consulta periodicamente os comandos pendentes de `waiterCommands`, valida o garçom/área/mesa/cardápio e importa `addItem` automaticamente para a comanda SQLite;
-- grava o recibo do comando na mesma transação local do item/estoque/outbox, para reentregas não duplicarem itens;
+- consulta periodicamente os comandos pendentes de `waiterCommands`, valida o garçom/área/mesa/item e aplica inclusão, remoção e alteração de observação na comanda SQLite;
+- grava o recibo do comando na mesma transação local da alteração/outbox, para reentregas não duplicarem nem reaplicarem ações;
 - atualiza `status` e `result` do comando no Firebase após o commit local;
 - publica `openOrder` dentro da mesa em `restaurantLive/areas`, tanto para pedidos recebidos do site quanto para itens adicionados no desktop;
 - cria IDs de mesas localmente, que são estáveis nessa instalação, mas não iguais entre instalações independentes.
@@ -28,8 +28,8 @@ Use o Firebase como transporte e fila de comandos, com o computador SYSMR da loj
 
 1. O desktop publica o cardápio em `restaurantLive/menu` e as áreas/mesas, incluindo o conteúdo da comanda aberta, em `restaurantLive/areas`.
 2. O site lê o cardápio e cada área atribuída ao garçom pelos IDs em `restaurantAccess/{waiterUid}/areas`.
-3. O site cria um comando imutável `addItem` em `waiterCommands/{commandId}`.
-4. O desktop consulta periodicamente comandos `pending`, valida a identidade do garçom e aplica automaticamente cada `addItem` em uma transação SQLite. A gravação de idempotência, item, eventual baixa de estoque e evento de saída são atômicos.
+3. O site cria comandos imutáveis `addItem`, `removeItem` ou `updateObservation` em `waiterCommands/{commandId}`.
+4. O desktop consulta periodicamente comandos `pending`, valida a identidade do garçom e aplica inclusão, remoção ou alteração da observação em uma transação SQLite. A gravação de idempotência, alteração, eventual movimento de estoque e evento de saída são atômicos.
 5. Depois do commit local, o desktop atualiza o comando para `applied`; erros de validação/estoque resultam em `rejected`.
 6. O desktop atualiza `openOrder` no snapshot da mesa. O site observa essa projeção e pode mostrar também itens inseridos diretamente no desktop.
 
@@ -366,6 +366,13 @@ O desktop publica também um snapshot de `restaurantLive/areas` no login e sempr
 
 Cada mesa inclui `openOrder`: `null` quando está livre ou um snapshot com atendente, itens e totais quando há comanda aberta. O desktop república esse mapa depois de mudanças de comanda (inclusive alterações locais no desktop), fechamento/pagamento e importação de pedido do site. O app web deve usar esse snapshot para exibir o mesmo estado que o PDV; não trate `waiterCommands` como histórico completo de consumo.
 
+Cada item também informa `paidQuantity`, a quantidade vinculada a pagamentos por item.
+`hasUnallocatedPayments` indica que existe pagamento por valor sem vínculo com itens:
+nesse caso, as quantidades não identificam integralmente o que foi pago, e novos
+pagamentos por item ficam bloqueados. O pagamento livre permanece disponível.
+Esses campos são somente informativos; o desktop continua sendo a autoridade
+dos valores e pagamentos.
+
 Desativar uma área é uma operação reversível, não exclusão física. Ela e suas mesas ficam no snapshot com `isActive: false`, preservando IDs e referências históricas. O desktop bloqueia a desativação enquanto houver comanda aberta na área, mantém pelo menos uma área ativa e pode reativar a área com os mesmos IDs.
 
 O SYSMR atual oferece cinco modelos no dropdown do Super Admin para inserir itens de exemplo: `pesqueiro`, `churrascaria`, `pizzaria`, `lanchonete-hamburgueria` e `restaurante-caseiro`. O modelo selecionado popula o cardápio local e os itens são publicados na projeção; o tipo escolhido ainda não é persistido como metadado separado da loja. O site pode agrupar pelo cardápio publicado, mas não deve inferir uma vertente exclusiva a partir dos itens, pois o lojista pode editar ou combinar modelos.
@@ -390,7 +397,7 @@ O desktop cria as mesas localmente e publica a correspondência completa `{areaI
 
 ## 6. Comando de pedido enviado pelo site
 
-O site começa com um único tipo de comando suportado: `addItem`.
+O site pode enviar três tipos de comando: `addItem`, `removeItem` e `updateObservation`.
 
 Exemplo em:
 
@@ -424,7 +431,62 @@ Regras do contrato:
 - O site não envia nome, categoria, preço, total, estoque, status de pagamento nem `orderId` como autoridade. O desktop consulta esses valores localmente e encontra/cria a comanda aberta pela mesa.
 - O site só cria registros com `status: "pending"`. Só o desktop altera o status e acrescenta resultado.
 - Use um ID novo para uma nova ação intencional, mesmo que seja o mesmo produto/mesa; use o ID anterior para uma repetição técnica da mesma ação.
-- `addItem` não cancela ou remove item e não recebe pagamento. Essas operações precisam de comandos próprios, autorização e validação, e não devem ser simuladas alterando o comando existente.
+- `removeItem` e `updateObservation` usam o `id` da linha retornada em `openOrder.items[].id` como `orderItemId`. Não use o ID do item do cardápio nesse campo. Para apagar uma observação, envie `observation: ""`.
+
+#### Variações do item (borda de sal, gelo, gelo e limão…)
+
+O desktop publica em cada `menu.items[]` o nó `options`: `{ "<optionId>": { "id", "name", "extraPrice" } }` (ausente/vazio quando o item não tem variações). `extraPrice` é o valor extra padrão por unidade.
+
+Para lançar, por exemplo, 4 refrigerantes, sendo 2 com gelo e limão com extra alterado para 2,00, o `addItem` leva o array opcional `options` (só em `addItem`, até 20 itens):
+
+```json
+{
+  "type": "addItem",
+  "quantity": 4,
+  "menuItemId": "...",
+  "options": [
+    { "optionId": "<id da variação>", "quantity": 2, "extraPrice": 2.0 }
+  ]
+}
+```
+
+- A soma de `options[].quantity` não pode passar de `quantity`; o restante sai como item simples, sem extra.
+- `extraPrice` é opcional (0 a 9999); se omitido vale o padrão do cadastro. É assim que o preço do copo com gelo e limão fica editável.
+- O desktop cria uma linha por variação (nome "Refrigerante (Gelo e limão)", preço base + extra) mais uma linha simples com o restante. Os `id`s dessas linhas vêm em `openOrder.items[]` para remover/editar observação.
+- `optionId` inválido, repetido ou soma maior que a quantidade geram `rejected`.
+
+Exemplo de remoção:
+
+```json
+{
+  "id": "GUID-DA-OPERACAO",
+  "type": "removeItem",
+  "employeeUid": "UID-AUTENTICADO-DO-GARCOM",
+  "areaId": "GUID-DA-AREA",
+  "tableId": "GUID-DA-MESA",
+  "orderItemId": "GUID-DA-LINHA-DA-COMANDA",
+  "createdAt": "2026-10-12T22:10:00.000Z",
+  "status": "pending"
+}
+```
+
+Exemplo de alteração ou remoção da observação:
+
+```json
+{
+  "id": "GUID-DA-OPERACAO",
+  "type": "updateObservation",
+  "employeeUid": "UID-AUTENTICADO-DO-GARCOM",
+  "areaId": "GUID-DA-AREA",
+  "tableId": "GUID-DA-MESA",
+  "orderItemId": "GUID-DA-LINHA-DA-COMANDA",
+  "observation": "Sem cebola",
+  "createdAt": "2026-10-12T22:10:00.000Z",
+  "status": "pending"
+}
+```
+
+Cada ação usa um novo UUID e segue as mesmas regras de autorização e repetição idempotente. O desktop rejeita remoção ou alteração de observação se houver pagamento parcial na comanda. Ele também confirma que a linha pertence à comanda aberta da mesa e à área autorizada do garçom.
 
 ### Exemplo de gravação no Firebase Web SDK modular
 
@@ -485,9 +547,9 @@ O `.write` para garçons é de criação; as regras não aceitam sobrescrita do 
 
 O desktop consulta a cada cinco segundos a fila `waiterCommands` filtrada por `status === "pending"` (o nó precisa do índice RTDB `"status"`). Para cada comando:
 
-1. Confere tipo `addItem`, UID de funcionário cadastrado/ativo, área atribuída localmente, mesa ativa pertencente à área, item ativo no cardápio e quantidade positiva.
-2. Usa o preço e o vínculo de estoque do cadastro local; não confia em preço ou estoque enviado pelo navegador.
-3. Cria ou reutiliza a comanda aberta da mesa e inclui o item. A tabela SQLite `RestaurantWaiterCommands` usa `CommandId` como chave única; o recibo, item, eventual baixa de estoque e eventos da outbox são gravados na mesma transação.
+1. Confere o tipo (`addItem`, `removeItem` ou `updateObservation`), UID de funcionário cadastrado/ativo e área atribuída localmente. Para inclusão, também valida item ativo e quantidade; para remoção/edição, valida a linha da comanda aberta da mesa.
+2. Usa os dados locais como autoridade; não confia em preço, estoque ou nome enviados pelo navegador.
+3. Cria/reutiliza a comanda e inclui o item, ou remove a linha restaurando o estoque vinculado, ou atualiza sua observação. A tabela SQLite `RestaurantWaiterCommands` usa `CommandId` como chave única; a alteração, eventual movimentação de estoque e eventos da outbox são gravados na mesma transação.
 4. Atualiza o comando Firebase para `applied` com `result.orderId` ou `rejected` com `result.message`, sempre acrescentando `result.processedAt`.
 5. Publica `openOrder` atualizado em `restaurantLive/areas/{areaId}/tables/{tableId}`. Se o desktop reiniciar ou a gravação do recibo no Firebase falhar após o commit, o comando é consultado novamente e a inbox impede duplicação.
 
@@ -764,3 +826,75 @@ Publique as regras usando o procedimento normal do projeto Firebase somente depo
 - Itens de comandas são gravados pelo repositório `SYSMR.Infrastructure/Persistence/SqliteRestaurantRepository.cs`.
 - Os IDs do cardápio, áreas e mesas são os GUIDs do SQLite e são publicados por loja. Comandas abertas aparecem no campo `openOrder` da respectiva mesa.
 - O worker e cliente REST do desktop processam `waiterCommands`, atualizam os recibos e republicam as comandas. A publicação das regras em `SYSMR.FirebaseFunctions/database.rules.json` ainda deve ser feita no projeto Firebase.
+
+## 14. Cardápio do Pesqueiro Mendonça e pedidos agrupados
+
+- Antes de iniciar a versão nova do desktop conectada à loja, teste e publique as regras atualizadas do Realtime Database. O desktop anuncia `restaurantLive/menu/capabilities/submitOrder = true`; regras antigas podem impedir o envio de pedidos pelo webapp. A partir da raiz do projeto, o comando de publicação é `firebase deploy --only database` (confirme antes o projeto Firebase selecionado). Este comando altera regras em produção.
+- No restaurante, entre como Super Admin, abra **Cardápio** e clique em **Cardápio pesqueiro**. A substituição exige confirmação e não é permitida com comandas abertas. Itens anteriores são desativados, não apagados, para manter o histórico; itens de mesmo nome são atualizados e deixam de estar vinculados ao estoque. A sincronização da loja publica o novo cardápio quando o desktop estiver conectado.
+- O modelo inclui as descrições disponíveis no PDF; os itens sem descrição no PDF ficam em branco. Se o cardápio já estiver instalado, use **Atualizar descrições** para preencher apenas descrições vazias dos itens ativos com nome e categoria correspondentes, sem alterar preços, opções ou estoque. Descrições podem ser editadas na coluna **Descrição**. A publicação no Firebase depende da sincronização do desktop.
+- Revise preços, variações e impressoras antes do atendimento. A unidade e a porção G de pimenta recheada são itens separados. A lata Original e a Brahma Zero foram cadastradas a R$ 7,00 conforme confirmação do responsável. Itens que só têm G exigem a escolha de G no webapp.
+- Preços M/G e destino (`kitchen` ou `bar`) podem ser alterados na lista do cardápio. O destino cadastrado determina a impressora; confira também as configurações das impressoras de cozinha e balcão. Produtos sem tamanho usam o preço principal. O preço das opções em `submitOrder` é o cadastrado no desktop, mesmo se o cliente enviar `extraPrice`.
+- O desktop valida todos os itens, tamanhos e variações, debita o estoque e registra o ID do comando em uma única transação. Se uma linha falhar, nenhuma linha é adicionada e o resultado será `rejected`. Uma repetição do mesmo ID retorna o resultado anterior. Não execute dois desktops independentes para a mesma loja.
+- Os itens de cada `submitOrder` recebem o mesmo número de envio, dividido entre cozinha e balcão; envios diferentes são mantidos separados. Impressões com falha podem ser reenviadas. Como a impressora não fornece confirmação transacional, uma interrupção após imprimir e antes de registrar sucesso pode exigir conferência manual para evitar duplicação.
+- O número do envio cresce até o fechamento do caixa, quando é reiniciado. O atendente da mesa é o garçom que abriu a comanda; cada envio registra o garçom que o realizou para impressão. O nome do cliente é opcional e, quando informado no primeiro envio, fica na comanda até seu fechamento. A mesa e a comanda no desktop exibem os nomes; a impressão térmica inclui o ícone no início da via.
+- Faça um teste real com um item M, uma bebida e observação: confirme o resultado `applied`, as duas vias, valores e atualização da mesa no desktop e no webapp. Teste também uma falha de impressora. A implementação não comprova o funcionamento do servidor local/offline, nem atualiza automaticamente o site hospedado no Cloudflare.
+# Ações unitárias e avisos: implementação ainda não ativada
+
+O desktop contém uma base experimental para `removeOne` e
+`updateOneObservation`, separada dos comandos antigos. A ação altera somente
+uma unidade inteira, preserva o lote original e registra o aviso em SQLite na
+mesma transação. Não permite operação após pagamento parcial nem em linhas
+fracionárias. A remoção devolve ao estoque somente a unidade removida.
+
+Essa base **não está liberada para uso pelo webapp**: faltam a negociação da
+capacidade, as regras Firebase, a integração da interface, proteção contra
+comandos baseados em snapshots antigos e testes completos de ponta a ponta.
+Não publique regras nem anuncie suporte até concluir essas etapas.
+
+Os avisos só são criados para itens cuja impressão automática foi confirmada
+com destino conhecido. Itens anteriores à atualização, impressos manualmente ou
+sem destino registrado são rejeitados e devem ser ajustados no caixa.
+O aviso usa a configuração atual da impressora do destino registrado; mudar
+a impressora de cozinha ou balcão pode mudar a impressora física que recebe
+o aviso. A fila persiste inclusive após o fechamento da comanda. Falhas são
+exibidas no desktop para tentativa manual; uma interrupção após enviar dados
+à impressora pode causar reimpressão duplicada. A impressão automática deve
+estar ativada e é necessário conferir fisicamente cozinha e balcão.
+
+Os comandos antigos `removeItem` e `updateObservation` continuam afetando a
+linha inteira e não geram esses avisos. As regras propostas em outras cópias
+ou anexos não são publicadas por esta alteração.
+
+Na comanda do desktop, lançamentos sem observação são agrupados somente na
+visualização quando produto, tamanho, opção, nome e preço são idênticos.
+Lançamentos com observação permanecem separados. Os registros e lotes originais
+continuam separados para estoque e impressão; ao remover um grupo, selecione
+qual lançamento original será removido. A remoção no desktop ainda remove a
+linha original inteira e não imprime aviso: é necessário avisar a equipe.
+Lançamentos anteriores à atualização não têm identidade de variação e
+permanecem separados, para evitar agrupamentos incorretos.
+
+### Pagamento e impressão na comanda desktop
+
+Com o caixa aberto, marque **Pagar por item**, clique em **Selecionar itens**,
+marque os lançamentos e informe as quantidades a pagar. O valor inclui a parcela
+proporcional dos 10% quando ativados. O sistema ajusta o arredondamento no
+decorrer dos pagamentos e impede selecionar uma quantidade já paga. A mesa
+permanece aberta até quitar o saldo. A taxa não pode ser alterada após o
+primeiro pagamento; itens não podem ser removidos após pagamento parcial.
+
+O pagamento por valor livre continua disponível, inclusive depois de pagar por
+item. Porém, após qualquer pagamento livre, não é possível voltar a pagar por
+item nessa comanda: o valor livre não identifica quais itens foram pagos. A
+coluna **Pago (qtd.)** mostra apenas as quantidades vinculadas a itens, não
+representa a distribuição de pagamentos livres. O troco é calculado sobre o
+valor informado no pagamento.
+
+Em **Imprimir**, escolha cozinha ou balcão e a comanda toda ou itens selecionados.
+A cópia da cozinha usa os números originais dos envios, sem marcar itens como
+impressos nem alterar a fila automática; itens sem número permanecem sem número.
+Para falhas da impressão automática, use **Reenviar falhas** na tela do restaurante.
+A conferência do balcão mostra quantidades, valores, quantidades pagas por item,
+soma selecionada, taxa, total pago e saldo da comanda. Ela não registra pagamento
+nem é comprovante. Em impressão parcial, a quantidade paga indicada pertence à
+linha original, não necessariamente à quantidade impressa.

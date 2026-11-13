@@ -165,6 +165,13 @@ public sealed class SqliteDatabase(string databasePath)
                 InventoryProductId TEXT REFERENCES Products(Id),
                 InventoryQuantityPerUnit TEXT NOT NULL DEFAULT '0'
             );
+            CREATE TABLE IF NOT EXISTS RestaurantMenuItemOptions (
+                Id TEXT PRIMARY KEY,
+                MenuItemId TEXT NOT NULL REFERENCES RestaurantMenuItems(Id),
+                Name TEXT NOT NULL,
+                ExtraPrice TEXT NOT NULL DEFAULT '0',
+                SortOrder INTEGER NOT NULL DEFAULT 0
+            );
             CREATE TABLE IF NOT EXISTS RestaurantEmployees (
                 Id TEXT PRIMARY KEY,
                 Name TEXT NOT NULL COLLATE NOCASE UNIQUE,
@@ -201,6 +208,21 @@ public sealed class SqliteDatabase(string databasePath)
                 OrderId TEXT,
                 ProcessedAt TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS RestaurantItemChangeNotices (
+                CommandId TEXT PRIMARY KEY,
+                OrderId TEXT NOT NULL,
+                TableNumber INTEGER NOT NULL,
+                AreaName TEXT NOT NULL,
+                ItemName TEXT NOT NULL,
+                PrintTarget TEXT NOT NULL,
+                PrintBatchNumber INTEGER,
+                Action TEXT NOT NULL,
+                OldObservation TEXT NOT NULL,
+                NewObservation TEXT NOT NULL,
+                CreatedAt TEXT NOT NULL,
+                Status TEXT NOT NULL DEFAULT 'pending',
+                Error TEXT
+            );
             CREATE TABLE IF NOT EXISTS RestaurantPayments (
                 Id TEXT PRIMARY KEY,
                 OrderId TEXT NOT NULL REFERENCES RestaurantOrders(Id),
@@ -215,6 +237,15 @@ public sealed class SqliteDatabase(string databasePath)
                 OpeningAmount TEXT NOT NULL,
                 ClosedAt TEXT,
                 ClosingAmount TEXT
+            );
+            CREATE TABLE IF NOT EXISTS RestaurantExpenses (
+                Id TEXT PRIMARY KEY,
+                CreatedAt TEXT NOT NULL,
+                Category TEXT NOT NULL,
+                Description TEXT NOT NULL,
+                Amount TEXT NOT NULL,
+                PaidFromCash INTEGER NOT NULL DEFAULT 0,
+                SessionId TEXT REFERENCES RestaurantCashSessions(Id)
             );
             CREATE TABLE IF NOT EXISTS RestaurantCashMovements (
                 Id TEXT PRIMARY KEY,
@@ -240,11 +271,22 @@ public sealed class SqliteDatabase(string databasePath)
         await EnsureColumnAsync(connection, "RestaurantAreas", "IsActive", "INTEGER NOT NULL DEFAULT 1");
         await EnsureColumnAsync(connection, "RestaurantTables", "IsActive", "INTEGER NOT NULL DEFAULT 1");
         await EnsureColumnAsync(connection, "RestaurantOrders", "WaiterServiceChargeEnabled", "INTEGER NOT NULL DEFAULT 0");
+        await EnsureColumnAsync(connection, "RestaurantOrders", "DailyNumber", "INTEGER");
+        await EnsureColumnAsync(connection, "RestaurantOrders", "CustomerName", "TEXT NOT NULL DEFAULT ''");
         await EnsureColumnAsync(connection, "RestaurantMenuItems", "InventoryProductId", "TEXT REFERENCES Products(Id)");
         await EnsureColumnAsync(connection, "RestaurantMenuItems", "InventoryQuantityPerUnit", "TEXT NOT NULL DEFAULT '0'");
+        await EnsureColumnAsync(connection, "RestaurantMenuItems", "PrintTarget", "TEXT NOT NULL DEFAULT 'kitchen'");
+        await EnsureColumnAsync(connection, "RestaurantMenuItems", "PriceM", "TEXT");
+        await EnsureColumnAsync(connection, "RestaurantMenuItems", "PriceG", "TEXT");
+        await EnsureColumnAsync(connection, "RestaurantMenuItems", "Description", "TEXT NOT NULL DEFAULT ''");
         await EnsureColumnAsync(connection, "RestaurantEmployees", "WaiterNumber", "TEXT");
         await EnsureColumnAsync(connection, "RestaurantEmployees", "FirebaseUid", "TEXT");
         await EnsureColumnAsync(connection, "RestaurantEmployees", "AreaIds", "TEXT NOT NULL DEFAULT ''");
+        await EnsureColumnAsync(connection, "RestaurantEmployees", "LocalPinHash", "TEXT");
+        await EnsureColumnAsync(connection, "RestaurantEmployees", "LocalPinSalt", "TEXT");
+        await EnsureColumnAsync(connection, "RestaurantOrderItems", "PrintBatchNumber", "INTEGER");
+        await EnsureColumnAsync(connection, "RestaurantOrderItems", "SendingEmployeeId", "TEXT REFERENCES RestaurantEmployees(Id)");
+        await EnsureColumnAsync(connection, "RestaurantOrderItems", "PrintBatchKey", "TEXT");
         await using (var waiterNumberIndex = connection.CreateCommand())
         {
             waiterNumberIndex.CommandText = """
@@ -256,13 +298,35 @@ public sealed class SqliteDatabase(string databasePath)
         await EnsureColumnAsync(connection, "RestaurantOrderItems", "InventoryProductId", "TEXT REFERENCES Products(Id)");
         await EnsureColumnAsync(connection, "RestaurantOrderItems", "InventoryQuantityPerUnit", "TEXT NOT NULL DEFAULT '0'");
         await EnsureColumnAsync(connection, "RestaurantOrderItems", "Observation", "TEXT NOT NULL DEFAULT ''");
+        if (await EnsureColumnAsync(connection, "RestaurantOrderItems", "KitchenPrintStatus", "TEXT"))
+        {
+            // Itens anteriores à coluna já foram tratados; evita reimprimi-los.
+            await using var baseline = connection.CreateCommand();
+            baseline.CommandText = "UPDATE RestaurantOrderItems SET KitchenPrintStatus = 'printed';";
+            await baseline.ExecuteNonQueryAsync(cancellationToken);
+        }
+        await EnsureColumnAsync(connection, "RestaurantOrderItems", "KitchenPrintError", "TEXT");
+        await EnsureColumnAsync(connection, "RestaurantOrderItems", "KitchenPrintTarget", "TEXT");
+        await EnsureColumnAsync(connection, "RestaurantOrderItems", "VariantKey", "TEXT");
         await MigrateRestaurantPaymentsAsync(connection, cancellationToken);
+        await using (var allocations = connection.CreateCommand())
+        {
+            allocations.CommandText = """
+                CREATE TABLE IF NOT EXISTS RestaurantPaymentItems (
+                    PaymentId TEXT NOT NULL REFERENCES RestaurantPayments(Id),
+                    OrderItemId TEXT NOT NULL REFERENCES RestaurantOrderItems(Id),
+                    Quantity TEXT NOT NULL,
+                    PRIMARY KEY (PaymentId, OrderItemId)
+                );
+                """;
+            await allocations.ExecuteNonQueryAsync(cancellationToken);
+        }
         await SeedProductsAsync(connection, cancellationToken);
     }
 
     public SqliteConnection CreateConnection() => new(_connectionString);
 
-    private static async Task EnsureColumnAsync(SqliteConnection connection, string table, string column, string declaration)
+    private static async Task<bool> EnsureColumnAsync(SqliteConnection connection, string table, string column, string declaration)
     {
         await using var inspect = connection.CreateCommand();
         inspect.CommandText = $"PRAGMA table_info({table});";
@@ -270,12 +334,13 @@ public sealed class SqliteDatabase(string databasePath)
         while (await reader.ReadAsync())
         {
             if (reader.GetString(1).Equals(column, StringComparison.OrdinalIgnoreCase))
-                return;
+                return false;
         }
         await reader.DisposeAsync();
         await using var alter = connection.CreateCommand();
         alter.CommandText = $"ALTER TABLE {table} ADD COLUMN {column} {declaration};";
         await alter.ExecuteNonQueryAsync();
+        return true;
     }
 
     private static async Task MigrateRestaurantPaymentsAsync(
