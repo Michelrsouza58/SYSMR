@@ -103,7 +103,7 @@
                     <Button Style="{StaticResource ToolbarButton}" Content="▦  Venda" Tag="Pdv" Click="Navigation_Click" ToolTip="Ponto de venda"/>
                     <Button Style="{StaticResource ToolbarButton}" Content="▤  Vendas" Tag="Sales" Click="Navigation_Click" ToolTip="Histórico e detalhes das vendas"/>
                     <Button x:Name="TopReturnsButton" Style="{StaticResource ToolbarButton}" Content="↩  Devoluções" Tag="Returns" Click="Navigation_Click" ToolTip="Devolução parcial ou integral de itens"/>
-                    <Button x:Name="TopCustomersButton" Style="{StaticResource ToolbarButton}" Content="♙  Clientes" Tag="Customers" Click="Navigation_Click" ToolTip="Cadastro de clientes" Visibility="Collapsed"/>
+                    <Button x:Name="TopCustomersButton" Style="{StaticResource ToolbarButton}" Content="♙  Clientes" Tag="Customers" Click="Navigation_Click" ToolTip="Cadastro de clientes"/>
                     <Button x:Name="TopStockButton" Style="{StaticResource ToolbarButton}" Content="▣  Estoque" Tag="Manager" Click="Navigation_Click" ToolTip="Consultar e gerenciar produtos e estoque"/>
                     <Button x:Name="TopSetupButton" Style="{StaticResource ToolbarButton}" Content="⚙  Configurações" Tag="Setup" Click="Navigation_Click" ToolTip="Preferências da loja e vendedores"/>
                     <Button x:Name="TopAuditButton" Style="{StaticResource ToolbarButton}" Content="☷  Auditoria" Tag="Audit" Click="Navigation_Click" ToolTip="Log de ações" Visibility="Collapsed"/>
@@ -177,7 +177,7 @@
                             <StackPanel DockPanel.Dock="Top">
                                 <TextBlock Text="Busca rápida" FontSize="16" FontWeight="Bold"/>
                                 <TextBlock Text="F2 para localizar por nome ou código" Foreground="{StaticResource MutedBrush}" FontSize="11" Margin="0,5,0,12"/>
-                                <TextBox x:Name="SearchBox" ToolTip="Digite o nome ou código do produto" TextChanged="SearchBox_TextChanged"/>
+                                <TextBox x:Name="SearchBox" ToolTip="Digite o nome ou passe o código de barras" TextChanged="SearchBox_TextChanged" KeyDown="SearchBox_KeyDown"/>
                             </StackPanel>
                             <DataGrid x:Name="SearchGrid" ItemsSource="{Binding SearchResults}" IsReadOnly="True" SelectionMode="Single" MouseDoubleClick="SearchGrid_MouseDoubleClick" Margin="0,12,0,0">
                                 <DataGrid.Columns>
@@ -440,6 +440,20 @@
                             </StackPanel>
                         </Border>
                         <Border Style="{StaticResource PanelCard}" Margin="0,0,0,14">
+                            <StackPanel>
+                                <TextBlock Text="Clientes" FontSize="17" FontWeight="Bold"/>
+                                <TextBlock Text="Cadastre e consulte clientes." Margin="0,6,0,8"/>
+                                <Button Content="Abrir cadastro de clientes" Tag="Customers" Click="Navigation_Click" HorizontalAlignment="Left"/>
+                            </StackPanel>
+                        </Border>
+                        <Border Style="{StaticResource PanelCard}" Margin="0,0,0,14">
+                            <StackPanel>
+                                <TextBlock Text="Taxas de cartão de crédito" FontSize="17" FontWeight="Bold"/>
+                                <TextBlock Text="Configure as taxas de 1x a 12x. Confira os percentuais com sua maquininha." TextWrapping="Wrap" Margin="0,6,0,8"/>
+                                <Button Content="Configurar taxas de crédito" Click="CreditRates_Click" HorizontalAlignment="Left"/>
+                            </StackPanel>
+                        </Border>
+                        <Border Style="{StaticResource PanelCard}" Margin="0,0,0,14">
                             <DockPanel>
                                 <StackPanel DockPanel.Dock="Top" Margin="0,0,0,12">
                                     <TextBlock Text="Vendedores" FontSize="17" FontWeight="Bold"/>
@@ -542,7 +556,7 @@
                         <Border Style="{StaticResource PanelCard}">
                             <StackPanel>
                                 <TextBlock Text="5. Clientes, devoluções e gestão" FontSize="17" FontWeight="Bold"/>
-                                <TextBlock Text="O cadastro do cliente é revisado a cada 30 dias. O vencimento gera alerta, mas não bloqueia a venda; use Renovar 30 dias após revisar. Em Vendas, escolha um cliente para filtrar o histórico e consultar suas notas em aberto. Selecione Receber para registrar um pagamento total ou parcial por dinheiro, Pix ou cartão; o saldo restante continua aberto. Imprima a nota pela ação de impressão. A aba Devoluções está disponível ao lojista; selecione uma venda e informe as quantidades de um ou mais itens. O estoque é atualizado, e devoluções de notas reduzem primeiro o saldo devedor. Antes de vender, cadastre a equipe em Configurações; no pagamento, selecione um vendedor ativo da lista. Configure também o comprovante térmico de 80 mm ou A4 com espaço para assinatura. O lojista pode consultar e editar o estoque. Clientes e auditoria exigem PIN do Super Admin; as configurações técnicas do Firebase ficam disponíveis dentro de Configurações após entrar como Super Admin." TextWrapping="Wrap" Margin="0,8,0,0"/>
+                                <TextBlock Text="O cadastro do cliente é revisado a cada 30 dias. O vencimento gera alerta, mas não bloqueia a venda; use Renovar 30 dias após revisar. Acesse Clientes pela barra superior ou em Configurações. Em Vendas, escolha um cliente para filtrar o histórico e consultar suas notas em aberto. Selecione Receber para registrar um pagamento total ou parcial por dinheiro, Pix ou cartão; o saldo restante continua aberto. Imprima a nota pela ação de impressão. Na aba Devoluções, selecione uma venda e informe as quantidades; o estoque é atualizado e devoluções de notas reduzem primeiro o saldo devedor. Cadastre vendedores em Configurações. O lojista pode consultar e editar o estoque. Auditoria e configurações técnicas do Firebase exigem Super Admin." TextWrapping="Wrap" Margin="0,8,0,0"/>
                             </StackPanel>
                         </Border>
                     </StackPanel>

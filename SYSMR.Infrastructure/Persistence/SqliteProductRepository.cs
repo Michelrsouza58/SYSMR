@@ -26,7 +26,7 @@ public sealed class SqliteProductRepository(SqliteDatabase database, string bran
         await connection.OpenAsync(cancellationToken);
         await using var command = connection.CreateCommand();
         command.CommandText = """
-            SELECT Id, Name, Barcode, ScaleCode, CostPrice, SalePrice, Stock, MinimumStock, Category, Ncm, Cest, SoldByWeight, UnitOfMeasure
+            SELECT Id, Name, Barcode, ScaleCode, CASE WHEN CostPriceKnown = 1 THEN CostPrice ELSE NULL END, SalePrice, Stock, MinimumStock, Category, Ncm, Cest, SoldByWeight, UnitOfMeasure
             FROM Products
             WHERE $query = '' OR Name LIKE $pattern ESCAPE '\' OR Barcode LIKE $pattern ESCAPE '\' OR Category LIKE $pattern ESCAPE '\'
             ORDER BY Name LIMIT 100;
@@ -48,7 +48,7 @@ public sealed class SqliteProductRepository(SqliteDatabase database, string bran
         await connection.OpenAsync(cancellationToken);
         await using var command = connection.CreateCommand();
         command.CommandText = """
-            SELECT Id, Name, Barcode, ScaleCode, CostPrice, SalePrice, Stock, MinimumStock, Category, Ncm, Cest, SoldByWeight, UnitOfMeasure
+            SELECT Id, Name, Barcode, ScaleCode, CASE WHEN CostPriceKnown = 1 THEN CostPrice ELSE NULL END, SalePrice, Stock, MinimumStock, Category, Ncm, Cest, SoldByWeight, UnitOfMeasure
             FROM Products ORDER BY Name;
             """;
         var products = new List<Product>();
@@ -78,14 +78,15 @@ public sealed class SqliteProductRepository(SqliteDatabase database, string bran
         command.Transaction = (SqliteTransaction)transaction;
         command.CommandText = """
             INSERT INTO Products
-                (Id, Name, Barcode, ScaleCode, CostPrice, SalePrice, Stock, MinimumStock, Category, Ncm, Cest, SoldByWeight, UnitOfMeasure)
+                (Id, Name, Barcode, ScaleCode, CostPrice, CostPriceKnown, SalePrice, Stock, MinimumStock, Category, Ncm, Cest, SoldByWeight, UnitOfMeasure)
             VALUES
-                ($id, $name, $barcode, $scaleCode, $costPrice, $salePrice, $stock, $minimumStock, $category, $ncm, $cest, $soldByWeight, $unit)
+                ($id, $name, $barcode, $scaleCode, $costPrice, $costPriceKnown, $salePrice, $stock, $minimumStock, $category, $ncm, $cest, $soldByWeight, $unit)
             ON CONFLICT(Id) DO UPDATE SET
                 Name = excluded.Name,
                 Barcode = excluded.Barcode,
                 ScaleCode = excluded.ScaleCode,
                 CostPrice = excluded.CostPrice,
+                CostPriceKnown = excluded.CostPriceKnown,
                 SalePrice = excluded.SalePrice,
                 Stock = excluded.Stock,
                 MinimumStock = excluded.MinimumStock,
@@ -99,7 +100,8 @@ public sealed class SqliteProductRepository(SqliteDatabase database, string bran
         command.Parameters.AddWithValue("$name", product.Name);
         command.Parameters.AddWithValue("$barcode", product.Barcode);
         command.Parameters.AddWithValue("$scaleCode", product.ScaleCode);
-        command.Parameters.AddWithValue("$costPrice", product.CostPrice.ToString(CultureInfo.InvariantCulture));
+        command.Parameters.AddWithValue("$costPrice", (product.CostPrice ?? 0m).ToString(CultureInfo.InvariantCulture));
+        command.Parameters.AddWithValue("$costPriceKnown", product.CostPrice.HasValue ? 1 : 0);
         command.Parameters.AddWithValue("$salePrice", product.SalePrice.ToString(CultureInfo.InvariantCulture));
         command.Parameters.AddWithValue("$stock", product.Stock.ToString(CultureInfo.InvariantCulture));
         command.Parameters.AddWithValue("$minimumStock", product.MinimumStock.ToString(CultureInfo.InvariantCulture));
@@ -141,7 +143,7 @@ public sealed class SqliteProductRepository(SqliteDatabase database, string bran
         await connection.OpenAsync(cancellationToken);
         await using var command = connection.CreateCommand();
         command.CommandText = $"""
-            SELECT Id, Name, Barcode, ScaleCode, CostPrice, SalePrice, Stock, MinimumStock, Category, Ncm, Cest, SoldByWeight, UnitOfMeasure
+            SELECT Id, Name, Barcode, ScaleCode, CASE WHEN CostPriceKnown = 1 THEN CostPrice ELSE NULL END, SalePrice, Stock, MinimumStock, Category, Ncm, Cest, SoldByWeight, UnitOfMeasure
             FROM Products WHERE {predicate} LIMIT 1;
             """;
         command.Parameters.AddWithValue("$code", code);
@@ -154,7 +156,7 @@ public sealed class SqliteProductRepository(SqliteDatabase database, string bran
         reader.GetString(1),
         reader.GetString(2),
         reader.GetString(3),
-        decimal.Parse(reader.GetString(4), CultureInfo.InvariantCulture),
+        reader.IsDBNull(4) ? null : decimal.Parse(reader.GetString(4), CultureInfo.InvariantCulture),
         decimal.Parse(reader.GetString(5), CultureInfo.InvariantCulture),
         decimal.Parse(reader.GetString(6), CultureInfo.InvariantCulture),
         decimal.Parse(reader.GetString(7), CultureInfo.InvariantCulture),

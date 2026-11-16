@@ -7,7 +7,7 @@ public sealed class Product
         string name,
         string barcode,
         string scaleCode,
-        decimal costPrice,
+        decimal? costPrice,
         decimal salePrice,
         decimal stock,
         decimal minimumStock,
@@ -43,7 +43,7 @@ public sealed class Product
     public string Name { get; }
     public string Barcode { get; }
     public string ScaleCode { get; }
-    public decimal CostPrice { get; }
+    public decimal? CostPrice { get; }
     public decimal SalePrice { get; }
     public decimal Stock { get; }
     public decimal MinimumStock { get; }

@@ -261,12 +261,18 @@ public sealed class SqliteDatabase(string databasePath)
             """;
         await command.ExecuteNonQueryAsync(cancellationToken);
         await EnsureColumnAsync(connection, "Products", "UnitOfMeasure", "TEXT NOT NULL DEFAULT 'UN'");
+        await EnsureColumnAsync(connection, "Products", "CostPriceKnown", "INTEGER NOT NULL DEFAULT 1");
+        foreach (var column in new[] { "PostalCode", "Street", "Number", "Complement", "Neighborhood", "City", "State" })
+            await EnsureColumnAsync(connection, "Customers", column, "TEXT NOT NULL DEFAULT ''");
         await using (var migrateWeightedUnits = connection.CreateCommand())
         {
             migrateWeightedUnits.CommandText = "UPDATE Products SET UnitOfMeasure = 'KG' WHERE SoldByWeight = 1 AND UnitOfMeasure = 'UN';";
             await migrateWeightedUnits.ExecuteNonQueryAsync(cancellationToken);
         }
         await EnsureColumnAsync(connection, "Sales", "CustomerId", "TEXT");
+        await EnsureColumnAsync(connection, "Sales", "CashTotal", "TEXT");
+        await EnsureColumnAsync(connection, "Sales", "CreditInstallments", "INTEGER");
+        await EnsureColumnAsync(connection, "Sales", "CreditFeePercent", "TEXT");
         await EnsureColumnAsync(connection, "Sales", "SellerName", "TEXT NOT NULL DEFAULT 'Não informado'");
         await EnsureColumnAsync(connection, "StoreAccountCache", "AutoLogin", "INTEGER NOT NULL DEFAULT 1");
         await EnsureColumnAsync(connection, "StoreAccountCache", "StoreType", "TEXT NOT NULL DEFAULT 'sales'");

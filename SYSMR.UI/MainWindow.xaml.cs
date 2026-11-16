@@ -6,6 +6,7 @@ using System.Windows.Controls;
 using System.Windows.Documents;
 using System.Windows.Input;
 using System.Windows.Media;
+using System.Windows.Media.Imaging;
 using System.Windows.Threading;
 using SYSMR.Application.Abstractions;
 using SYSMR.Application.Models;
@@ -228,6 +229,33 @@ public partial class MainWindow : Window
         await RefreshSearchAsync();
     }
 
+    private async void SearchBox_KeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key != Key.Enter)
+            return;
+        e.Handled = true;
+        var barcode = SearchBox.Text.Trim();
+        if (barcode.Length == 0)
+            return;
+        try
+        {
+            var scanned = await _catalog.FindScannedProductAsync(barcode);
+            if (scanned is null)
+            {
+                StatusText.Text = $"Nenhum produto encontrado pelo código {barcode}.";
+                return;
+            }
+            AddToCart(scanned);
+            SearchBox.Clear();
+            BarcodeBox.Focus();
+            StatusText.Text = $"{scanned.Product.Name} adicionado.";
+        }
+        catch (Exception exception)
+        {
+            ShowOperationError("Não foi possível localizar o produto", exception);
+        }
+    }
+
     private async Task RefreshSearchAsync()
     {
         try
@@ -290,13 +318,21 @@ public partial class MainWindow : Window
             return;
         }
         var customer = CustomerSelector.SelectedItem as Customer;
-        var paymentWindow = new PaymentWindow(
-            Total,
-            sellers.Select(seller => seller.Name).ToArray(),
-            customer is not null) { Owner = this };
+        PaymentWindow paymentWindow;
+        try
+        {
+            paymentWindow = new PaymentWindow(Total, sellers.Select(seller => seller.Name).ToArray(),
+                await CreditRatesWindow.LoadAsync(_accessControl), customer is not null) { Owner = this };
+        }
+        catch (Exception exception)
+        {
+            ShowOperationError("Não foi possível carregar as taxas de crédito", exception);
+            return;
+        }
         if (paymentWindow.ShowDialog() != true)
             return;
 
+        var saleWasRegistered = false;
         try
         {
             var items = _cart.Select(row => new SaleItem(row.ProductId, row.Name, row.Quantity, row.UnitPrice)).ToArray();
@@ -308,7 +344,9 @@ public partial class MainWindow : Window
                 paymentWindow.SelectedPayment,
                 CustomerBox.Text,
                 customer?.Id,
-                sellerName);
+                sellerName,
+                creditTerms: paymentWindow.SelectedCreditTerms);
+            saleWasRegistered = true;
             _cart.Clear();
             CustomerSelector.SelectedItem = null;
             CustomerBox.Clear();
@@ -341,16 +379,19 @@ public partial class MainWindow : Window
                     GetPaymentLabel(paymentWindow.SelectedPayment),
                     completedAt,
                     items,
-                    items.Sum(item => item.Total),
+                    paymentWindow.SelectedCreditTerms?.CalculateTotal(items.Sum(item => item.Total)) ?? items.Sum(item => item.Total),
                     paymentWindow.SelectedPayment == PaymentMethod.StoreCredit
                         ? $"Valor original: {items.Sum(item => item.Total):C2}\nRecebido: {0:C2}\nSaldo em aberto: {items.Sum(item => item.Total):C2}"
-                        : null);
+                        : CreditDetails(paymentWindow.SelectedCreditTerms, items.Sum(item => item.Total),
+                            paymentWindow.SelectedCreditTerms?.CalculateTotal(items.Sum(item => item.Total)) ?? items.Sum(item => item.Total)));
             }
             BarcodeBox.Focus();
         }
         catch (Exception exception)
         {
-            ShowOperationError("A venda não foi registrada", exception);
+            ShowOperationError(saleWasRegistered
+                ? "A venda foi registrada, mas não foi possível imprimir ou atualizar a tela"
+                : "A venda não foi registrada", exception);
         }
     }
 
@@ -369,7 +410,7 @@ public partial class MainWindow : Window
         if (sender is not Button { Tag: string target })
             return;
 
-        if (target is "Customers" or "Audit" &&
+        if (target is "Audit" &&
             !await EnsureAdministratorAccessAsync())
             return;
 
@@ -446,7 +487,7 @@ public partial class MainWindow : Window
     private void UpdateAdministratorVisibility()
     {
         var visibility = _isAdministratorSession ? Visibility.Visible : Visibility.Collapsed;
-        TopCustomersButton.Visibility = visibility;
+        TopCustomersButton.Visibility = Visibility.Visible;
         TopAuditButton.Visibility = visibility;
         SidebarAuditButton.Visibility = visibility;
         TopSetupButton.Visibility = Visibility.Visible;
@@ -455,8 +496,7 @@ public partial class MainWindow : Window
         SettingsAdminButton.Content = _isAdministratorSession ? "Sair do Super Admin" : "Entrar como Super Admin";
         AdminAccessButton.Content = _isAdministratorSession ? "Sair do Super Admin" : "Entrar Super Admin";
         if (!_isAdministratorSession &&
-            (CustomersPage.Visibility == Visibility.Visible ||
-             AuditPage.Visibility == Visibility.Visible))
+            AuditPage.Visibility == Visibility.Visible)
             ShowPage("Pdv");
     }
 
@@ -895,6 +935,27 @@ public partial class MainWindow : Window
         _ => paymentMethod.ToString()
     };
 
+    private static string? CreditDetails(CreditTerms? terms, decimal cashTotal, decimal total)
+    {
+        if (terms is null)
+            return null;
+        return InstallmentDisplay.Format(terms, cashTotal, total);
+    }
+
+    private async void CreditRates_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            var dialog = new CreditRatesWindow(_accessControl, await CreditRatesWindow.LoadAsync(_accessControl)) { Owner = this };
+            if (dialog.ShowDialog() == true)
+                StatusText.Text = "Taxas de crédito atualizadas para novas vendas.";
+        }
+        catch (Exception exception)
+        {
+            ShowOperationError("Não foi possível abrir as taxas de crédito", exception);
+        }
+    }
+
     private async void ReturnsGrid_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
         if (ReturnsGrid.SelectedItem is SaleHistoryEntry selected)
@@ -955,7 +1016,7 @@ public partial class MainWindow : Window
                 sale.Summary.Total,
                 sale.Summary.PaymentMethod == PaymentMethod.StoreCredit
                     ? BuildAccountReceiptDetails(sale)
-                    : null);
+                    : CreditDetails(sale.Summary.CreditTerms, sale.Summary.CashTotal ?? sale.Items.Sum(item => item.Total), sale.Summary.Total));
         }
         catch (Exception exception)
         {
@@ -979,11 +1040,12 @@ public partial class MainWindow : Window
 
             var returnedItems = sale.Items
                 .Where(item => sale.ReturnedQuantities.GetValueOrDefault(item.ProductId) > 0)
-                .Select(item => new SaleItem(
-                    item.ProductId,
-                    item.ProductName,
-                    sale.ReturnedQuantities[item.ProductId],
-                    item.UnitPrice))
+                .GroupBy(item => item.ProductId)
+                .Select(group => new SaleItem(
+                    group.Key,
+                    group.First().ProductName,
+                    sale.ReturnedQuantities[group.Key],
+                    group.First().UnitPrice))
                 .ToArray();
             if (returnedItems.Length == 0)
             {
@@ -1003,7 +1065,10 @@ public partial class MainWindow : Window
                 sale.Summary.PaymentLabel,
                 DateTimeOffset.Now,
                 returnedItems,
-                returnedItems.Sum(item => item.Total));
+                sale.Summary.AmountReturned,
+                sale.Summary.AmountReturned != sale.ReturnedBaseTotal || sale.ReturnedBaseTotal != returnedItems.Sum(item => item.Total)
+                    ? $"Valor efetivo dos itens: {sale.ReturnedBaseTotal:C2}\nAcréscimo proporcional devolvido: {sale.Summary.AmountReturned - sale.ReturnedBaseTotal:C2}\nOs valores dos itens podem incluir ajuste de arredondamento."
+                    : null);
         }
         catch (Exception exception)
         {
@@ -1038,20 +1103,28 @@ public partial class MainWindow : Window
                 MessageBoxButton.OK, MessageBoxImage.Warning);
             return;
         }
-        var amount = selectedItems.Sum(item => item.Total);
         if (MessageBox.Show(
-                $"Registrar a devolução dos itens selecionados no total de {amount:C2}?\nO estoque será reposto nas quantidades informadas e o caixa receberá o estorno pelo meio de pagamento original.",
+                "Registrar a devolução dos itens selecionados?\nO valor será calculado no registro, incluindo eventual acréscimo proporcional. O estoque será reposto e o caixa atualizado.",
                 "Confirmar devolução",
                 MessageBoxButton.YesNo,
                 MessageBoxImage.Warning) != MessageBoxResult.Yes)
             return;
 
+        SaleReturnResult result;
         try
         {
-            await _sales.ReturnSaleAsync(selected.Id, selectedItems, $"Loja ({_storeName})");
-            StatusText.Text = $"Devolução de {amount:C2} registrada; estoque e caixa foram atualizados.";
+            result = await _sales.ReturnSaleAsync(selected.Id, selectedItems, $"Loja ({_storeName})");
+        }
+        catch (Exception exception)
+        {
+            ShowOperationError("Não foi possível registrar a devolução", exception);
+            return;
+        }
+        StatusText.Text = $"Devolução de {result.Amount:C2} registrada; estoque e caixa foram atualizados.";
+        try
+        {
             if (MessageBox.Show(
-                    "Devolução registrada. Deseja imprimir o comprovante agora?",
+                    $"Devolução de {result.Amount:C2} registrada. Deseja imprimir o comprovante agora?",
                     "Imprimir comprovante",
                     MessageBoxButton.YesNo,
                     MessageBoxImage.Question) == MessageBoxResult.Yes)
@@ -1064,14 +1137,17 @@ public partial class MainWindow : Window
                     selected.PaymentLabel,
                     DateTimeOffset.Now,
                     selectedItems,
-                    amount);
+                    result.Amount,
+                    result.Amount != result.BaseAmount || result.BaseAmount != selectedItems.Sum(item => item.Total)
+                        ? $"Valor efetivo dos itens: {result.BaseAmount:C2}\nAcréscimo proporcional devolvido: {result.Amount - result.BaseAmount:C2}\nOs valores dos itens podem incluir ajuste de arredondamento."
+                        : null);
             }
             await RefreshReturnsAsync();
             await RefreshManagerAsync();
         }
         catch (Exception exception)
         {
-            ShowOperationError("Não foi possível registrar a devolução", exception);
+            ShowOperationError("A devolução foi registrada, mas não foi possível imprimir ou atualizar a tela", exception);
         }
     }
 
@@ -1151,6 +1227,20 @@ public partial class MainWindow : Window
             PagePadding = isA4 ? new Thickness(48) : new Thickness(14, 12, 14, 16),
             ColumnWidth = (isA4 ? 8.27 * 96 : 80 * 96 / 25.4) - (isA4 ? 96 : 28)
         };
+        if (isA4)
+        {
+            var icon = new BitmapImage(new Uri("pack://application:,,,/SYSMR.UI;component/Assets/sysmr-print.png"));
+            document.Blocks.Add(new BlockUIContainer(new Image
+            {
+                Source = icon,
+                Width = 64,
+                Height = 64,
+                HorizontalAlignment = HorizontalAlignment.Left
+            })
+            {
+                Margin = new Thickness(0, 0, 0, 4)
+            });
+        }
         document.Blocks.Add(new Paragraph(new Run(storeName))
         {
             FontFamily = new FontFamily("Segoe UI"),

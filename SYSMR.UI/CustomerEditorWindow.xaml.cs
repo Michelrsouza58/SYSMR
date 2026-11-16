@@ -18,6 +18,13 @@ public partial class CustomerEditorWindow : Window
         DocumentBox.Text = customer.Document;
         PhoneBox.Text = customer.Phone;
         EmailBox.Text = customer.Email;
+        PostalCodeBox.Text = customer.PostalCode;
+        StreetBox.Text = customer.Street;
+        NumberBox.Text = customer.Number;
+        ComplementBox.Text = customer.Complement;
+        NeighborhoodBox.Text = customer.Neighborhood;
+        CityBox.Text = customer.City;
+        StateBox.Text = customer.State;
     }
 
     public Customer? Result { get; private set; }
@@ -34,7 +41,9 @@ public partial class CustomerEditorWindow : Window
                 PhoneBox.Text,
                 EmailBox.Text,
                 _customer?.RegisteredAt ?? now,
-                _customer?.ExpiresAt ?? now.AddDays(30));
+                _customer?.ExpiresAt ?? now.AddDays(30),
+                PostalCodeBox.Text, StreetBox.Text, NumberBox.Text, ComplementBox.Text,
+                NeighborhoodBox.Text, CityBox.Text, StateBox.Text);
             DialogResult = true;
         }
         catch (Exception exception)

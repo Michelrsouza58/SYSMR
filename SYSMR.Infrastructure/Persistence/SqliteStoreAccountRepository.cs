@@ -140,7 +140,8 @@ public sealed class SqliteStoreAccountRepository(SqliteDatabase database)
             clearStoreSettings.CommandText = """
                 DELETE FROM AppSettings
                 WHERE Key IN ('receipt.storeName', 'receipt.phone', 'receipt.address', 'receipt.footer',
-                              'printBatch.counter', 'restaurant.tables.defaultCount', 'waiter.commissionPercent');
+                              'printBatch.counter', 'restaurant.tables.defaultCount', 'waiter.commissionPercent',
+                              'sales.creditRates');
                 """;
             await clearStoreSettings.ExecuteNonQueryAsync(cancellationToken);
         }

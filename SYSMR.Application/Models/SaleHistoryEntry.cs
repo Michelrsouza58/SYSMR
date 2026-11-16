@@ -16,6 +16,8 @@ public sealed record SaleHistoryEntry(
     public decimal AmountPaid { get; init; }
     public decimal AmountReturned { get; init; }
     public decimal BalanceDue { get; init; }
+    public decimal? CashTotal { get; init; }
+    public CreditTerms? CreditTerms { get; init; }
 
     public string PaymentLabel => PaymentMethod switch
     {
@@ -34,12 +36,15 @@ public sealed record SaleRecord(
     IReadOnlyDictionary<Guid, decimal> ReturnedQuantities)
 {
     public IReadOnlyList<SalePaymentEntry> Payments { get; init; } = [];
+    public decimal ReturnedBaseTotal { get; init; }
 }
 
 public sealed record SalePaymentEntry(
     DateTimeOffset PaidAt,
     decimal Amount,
     PaymentMethod PaymentMethod);
+
+public sealed record SaleReturnResult(decimal BaseAmount, decimal Amount);
 
 public sealed record OpenAccountEntry(
     Guid SaleId,

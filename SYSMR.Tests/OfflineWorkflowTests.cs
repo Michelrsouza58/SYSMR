@@ -9,6 +9,7 @@ using SYSMR.Domain.Entities;
 using SYSMR.Infrastructure.LocalServer;
 using SYSMR.Infrastructure.Persistence;
 using SYSMR.Infrastructure.Printing;
+using SYSMR.UI;
 
 namespace SYSMR.Tests;
 
@@ -33,6 +34,201 @@ public sealed class OfflineWorkflowTests : IAsyncLifetime
         if (Directory.Exists(_testDirectory))
             Directory.Delete(_testDirectory, recursive: true);
         return Task.CompletedTask;
+    }
+
+    [Fact]
+    public async Task ProductCostCanBeUnknownWithoutConfusingItWithZero()
+    {
+        var product = new Product(Guid.NewGuid(), "Produto sem custo", "123", "", null, 5m, 4m, 1m,
+            "Teste", "", "", false);
+        await _products.SaveAsync(product);
+        Assert.Null((await _products.FindByBarcodeAsync("123"))!.CostPrice);
+        var zero = new Product(product.Id, product.Name, product.Barcode, "", 0m, 5m, 4m, 1m,
+            "Teste", "", "", false);
+        await _products.SaveAsync(zero);
+        Assert.Equal(0m, (await _products.FindByBarcodeAsync("123"))!.CostPrice);
+        Assert.NotNull((await _products.FindByBarcodeAsync("7891000100103"))!.CostPrice);
+    }
+
+    [Fact]
+    public async Task CustomerAddressPersistsAndSurvivesRenewal()
+    {
+        var now = DateTimeOffset.UtcNow;
+        var customer = new Customer(Guid.NewGuid(), "Cliente", "123", "11999999999", "", now, now.AddDays(30),
+            "12345678", "Rua teste", "10", "Casa", "Centro", "Cidade", "SP");
+        var repository = new SqliteCustomerRepository(_database);
+        await repository.SaveAsync(customer);
+        var stored = Assert.Single(await repository.SearchAsync("Cliente"));
+        Assert.Equal("12345678", stored.PostalCode);
+        Assert.Equal("Rua teste", stored.Street);
+        Assert.Equal("10", stored.Number);
+        Assert.Equal("Casa", stored.Complement);
+        Assert.Equal("Centro", stored.Neighborhood);
+        Assert.Equal("Cidade", stored.City);
+        Assert.Equal("SP", stored.State);
+        await repository.RenewAsync(stored.Id, now.AddDays(1));
+        Assert.Equal("Rua teste", Assert.Single(await repository.SearchAsync("Cliente")).Street);
+        Assert.Equal("Rua teste", stored.Renew(now.AddDays(1)).Street);
+    }
+
+    [Fact]
+    public async Task CreditSalePreservesTermsAndRefundsProportionally()
+    {
+        var product = (await _products.FindByBarcodeAsync("7891000100103"))!;
+        var terms = new CreditTerms(3, 10m);
+        Assert.Equal(111.12m, terms.CalculateTotal(100m));
+        Assert.Equal(111.12m, terms.Split(111.12m).Sum());
+        var service = new SalesService(_sales);
+        var items = new[] { new SaleItem(product.Id, product.Name, 2m, 5m) };
+        var saleId = await service.CompleteAsync(items, PaymentMethod.CreditCard, null, creditTerms: terms);
+        var sale = (await service.GetSaleAsync(saleId))!;
+        Assert.Equal(11.13m, sale.Summary.Total);
+        Assert.Equal(10m, sale.Summary.CashTotal);
+        Assert.Equal(terms, sale.Summary.CreditTerms);
+        Assert.Equal(11.13m, (await service.GetSalesAsync("")).Single(entry => entry.Id == saleId).Total);
+        await service.ReturnSaleAsync(saleId, [new SaleItem(product.Id, product.Name, 1m, 5m)]);
+        Assert.Equal(5.57m, (await service.GetSaleAsync(saleId))!.Summary.AmountReturned);
+        await service.ReturnSaleAsync(saleId, [new SaleItem(product.Id, product.Name, 1m, 5m)]);
+        sale = (await service.GetSaleAsync(saleId))!;
+        Assert.Equal(11.13m, sale.Summary.AmountReturned);
+        Assert.True(sale.Summary.IsReturned);
+        Assert.Equal(0m, await service.GetSalesTotalAsync());
+        await using var connection = _database.CreateConnection();
+        await connection.OpenAsync();
+        await using var check = connection.CreateCommand();
+        check.CommandText = "SELECT Amount FROM CashMovements ORDER BY rowid;";
+        var movements = new List<decimal>();
+        await using var reader = await check.ExecuteReaderAsync();
+        while (await reader.ReadAsync())
+            movements.Add(decimal.Parse(reader.GetString(0), System.Globalization.CultureInfo.InvariantCulture));
+        Assert.Equal(new[] { 11.13m, -5.57m, -5.56m }, movements);
+    }
+
+    [Fact]
+    public void CreditTermsKeepNetAndSplitCentsWithoutLosingValue()
+    {
+        var terms = new CreditTerms(12, 12.4m);
+        var total = terms.CalculateTotal(100m);
+        Assert.Equal(114.24m, total);
+        Assert.True(total * (1m - terms.FeePercent / 100m) >= 100m);
+        Assert.Equal(total, terms.Split(total).Sum());
+        Assert.Throws<ArgumentOutOfRangeException>(() => new CreditTerms(13, 1m).CalculateTotal(10m));
+        Assert.Throws<ArgumentOutOfRangeException>(() => new CreditTerms(1, 100m).CalculateTotal(10m));
+        Assert.Throws<ArgumentOutOfRangeException>(() => new CreditTerms(0, 0m).Split(1m));
+        Assert.Throws<ArgumentOutOfRangeException>(() => terms.Split(1.001m));
+        Assert.Throws<ArgumentException>(() => new Sale(Guid.NewGuid(), DateTimeOffset.UtcNow, PaymentMethod.CreditCard,
+            [new SaleItem(Guid.NewGuid(), "Item", 1m, 0.01m)], creditTerms: new CreditTerms(12, 0m)));
+        Assert.Throws<ArgumentException>(() => CreditRates.Validate([1m]));
+        Assert.Throws<ArgumentException>(() => CreditRates.Validate(Enumerable.Repeat(100m, 12).ToArray()));
+    }
+
+    [Fact]
+    public void CreditInstallmentDisplayShowsOnlyCashAndCreditTotals()
+    {
+        var culture = System.Globalization.CultureInfo.GetCultureInfo("pt-BR");
+        Assert.Equal("Valor à vista: R$ 60,00\nCrédito 11x: R$ 67,99",
+            InstallmentDisplay.Format(new CreditTerms(11, 10m), 60m, 67.99m, culture));
+        Assert.Equal("Valor à vista: R$ 5,00\nCrédito 1x: R$ 5,00",
+            InstallmentDisplay.Format(new CreditTerms(1, 0m), 5m, 5m, culture));
+    }
+
+    [Fact]
+    public void CreditNewSalesHaveEqualInstallmentsAndMinimalAdjustment()
+    {
+        var culture = System.Globalization.CultureInfo.GetCultureInfo("pt-BR");
+        for (var count = 1; count <= 12; count++)
+        {
+            var terms = new CreditTerms(count, 3.15m);
+            foreach (var cash in new[] { 1m, 30.02m, 100m, 1234.56m })
+            {
+                var minimum = terms.CalculateMinimumTotal(cash);
+                var total = terms.CalculateTotal(cash);
+                var installments = terms.Split(total);
+                Assert.InRange(total - minimum, 0m, (count - 1) / 100m);
+                Assert.All(installments, installment => Assert.Equal(installments[0], installment));
+                Assert.Equal(total, installments.Sum());
+                Assert.True(total * (1m - terms.FeePercent / 100m) >= cash);
+                Assert.Equal($"Valor à vista: {cash.ToString("C2", culture)}\nCrédito {count}x: {total.ToString("C2", culture)}",
+                    InstallmentDisplay.Format(terms, cash, total, culture));
+            }
+        }
+        Assert.Equal(30.03m, new CreditTerms(3, 0m).CalculateTotal(30.02m));
+    }
+
+    [Fact]
+    public async Task CreditLegacyUnequalInstallmentsKeepStoredTotal()
+    {
+        var product = (await _products.FindByBarcodeAsync("7891000100103"))!;
+        var service = new SalesService(_sales);
+        var id = await service.CompleteAsync([new SaleItem(product.Id, product.Name, 1m, 10m)],
+            PaymentMethod.CreditCard, null, creditTerms: new CreditTerms(3, 10m));
+        await using (var connection = _database.CreateConnection())
+        {
+            await connection.OpenAsync();
+            await using var command = connection.CreateCommand();
+            command.CommandText = "UPDATE Sales SET Total = '11.12' WHERE Id = $id;";
+            command.Parameters.AddWithValue("$id", id.ToString());
+            await command.ExecuteNonQueryAsync();
+        }
+        var sale = (await service.GetSaleAsync(id))!;
+        Assert.Equal(11.12m, sale.Summary.Total);
+        Assert.Equal("Valor à vista: R$ 10,00\nCrédito 3x: R$ 11,12",
+            InstallmentDisplay.Format(sale.Summary.CreditTerms!, sale.Summary.CashTotal!.Value, sale.Summary.Total,
+                System.Globalization.CultureInfo.GetCultureInfo("pt-BR")));
+    }
+
+    [Fact]
+    public async Task CreditFractionalReturnsAllocateLastCentAndNeverExceedSale()
+    {
+        var milk = (await _products.FindByBarcodeAsync("7891000100103"))!;
+        var coffee = (await _products.SearchAsync("Cafe")).Single();
+        var service = new SalesService(_sales);
+        var saleId = await service.CompleteAsync(
+            [new SaleItem(milk.Id, milk.Name, 1m, 0.05m), new SaleItem(coffee.Id, coffee.Name, 1m, 2.37m)],
+            PaymentMethod.CreditCard, null, creditTerms: new CreditTerms(3, 10m));
+        var results = new List<SaleReturnResult>();
+        foreach (var quantity in new[] { 0.333m, 0.333m, 0.334m })
+            results.Add(await service.ReturnSaleAsync(saleId, [new SaleItem(milk.Id, milk.Name, quantity, 0.05m)]));
+        results.Add(await service.ReturnSaleAsync(saleId, [new SaleItem(coffee.Id, coffee.Name, 1m, 2.37m)]));
+        Assert.Equal(new[] { 0.02m, 0.01m, 0.02m, 2.37m }, results.Select(result => result.BaseAmount));
+        var sale = (await service.GetSaleAsync(saleId))!;
+        Assert.Equal(2.42m, sale.ReturnedBaseTotal);
+        Assert.Equal(2.70m, sale.Summary.Total);
+        Assert.Equal(sale.Summary.Total, results.Sum(result => result.Amount));
+        Assert.Equal(sale.Summary.Total, sale.Summary.AmountReturned);
+        Assert.Equal(1m, sale.ReturnedQuantities[milk.Id]);
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            service.ReturnSaleAsync(saleId, [new SaleItem(milk.Id, milk.Name, 0.001m, 0.05m)]));
+    }
+
+    [Fact]
+    public async Task CreditSnapshotSurvivesRateChangesAndLegacySalesRemainReadable()
+    {
+        var milk = (await _products.FindByBarcodeAsync("7891000100103"))!;
+        var service = new SalesService(_sales);
+        var settings = new SqliteAccessControl(_database);
+        await settings.SetSettingAsync("sales.creditRates", "[10,10,10,10,10,10,10,10,10,10,10,10]");
+        var item = new SaleItem(milk.Id, milk.Name, 1m, 10m);
+        var creditId = await service.CompleteAsync([item], PaymentMethod.CreditCard, null, creditTerms: new CreditTerms(1, 10m));
+        var oldId = await service.CompleteAsync([item], PaymentMethod.Cash, null);
+        await settings.SetSettingAsync("sales.creditRates", "[20,20,20,20,20,20,20,20,20,20,20,20]");
+        await using (var connection = _database.CreateConnection())
+        {
+            await connection.OpenAsync();
+            await using var command = connection.CreateCommand();
+            command.CommandText = "UPDATE Sales SET CashTotal = NULL, CreditInstallments = NULL, CreditFeePercent = NULL WHERE Id = $id;";
+            command.Parameters.AddWithValue("$id", oldId.ToString());
+            await command.ExecuteNonQueryAsync();
+        }
+        await _database.InitializeAsync();
+        var credit = (await service.GetSaleAsync(creditId))!;
+        Assert.Equal(new CreditTerms(1, 10m), credit.Summary.CreditTerms);
+        Assert.Equal(11.12m, credit.Summary.Total);
+        var old = (await service.GetSaleAsync(oldId))!;
+        Assert.Null(old.Summary.CreditTerms);
+        Assert.Null(old.Summary.CashTotal);
+        Assert.Equal(10m, old.Summary.Total);
+        Assert.Equal(10m, (await service.ReturnSaleAsync(oldId, [item])).Amount);
     }
 
     [Fact]
@@ -435,7 +631,8 @@ public sealed class OfflineWorkflowTests : IAsyncLifetime
                     ('receipt.phone', '111'), ('receipt.address', 'Rua antiga'),
                     ('receipt.footer', 'Antigo'), ('waiter.commissionPercent', '5'),
                     ('printBatch.counter', '12'), ('restaurant.tables.defaultCount', '12');
-                INSERT INTO Customers VALUES ('customer', 'Cliente', '', '', '', '2026', '2027');
+                INSERT INTO Customers (Id, Name, Document, Phone, Email, RegisteredAt, ExpiresAt)
+                    VALUES ('customer', 'Cliente', '', '', '', '2026', '2027');
                 INSERT INTO Sellers VALUES ('seller', 'Vendedor', 1);
                 INSERT INTO Sales (Id, CreatedAt, PaymentMethod, Total) VALUES ('sale', '2026', 'Cash', '10');
                 INSERT INTO SaleItems (SaleId, ProductId, ProductName, Quantity, UnitPrice, Total)

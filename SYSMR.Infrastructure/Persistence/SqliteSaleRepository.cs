@@ -59,8 +59,8 @@ public sealed class SqliteSaleRepository(SqliteDatabase database) : ISaleReposit
         {
             command.Transaction = (SqliteTransaction)transaction;
             command.CommandText = """
-                INSERT INTO Sales (Id, CreatedAt, PaymentMethod, Total, CustomerDocument, CustomerId, SellerName, SyncStatus)
-                VALUES ($id, $createdAt, $payment, $total, $document, $customerId, $seller, 0);
+                INSERT INTO Sales (Id, CreatedAt, PaymentMethod, Total, CustomerDocument, CustomerId, SellerName, SyncStatus, CashTotal, CreditInstallments, CreditFeePercent)
+                VALUES ($id, $createdAt, $payment, $total, $document, $customerId, $seller, 0, $cashTotal, $installments, $fee);
                 """;
             command.Parameters.AddWithValue("$id", sale.Id.ToString());
             command.Parameters.AddWithValue("$createdAt", sale.CreatedAt.ToString("O", CultureInfo.InvariantCulture));
@@ -69,6 +69,9 @@ public sealed class SqliteSaleRepository(SqliteDatabase database) : ISaleReposit
             command.Parameters.AddWithValue("$document", (object?)sale.CustomerDocument ?? DBNull.Value);
             command.Parameters.AddWithValue("$customerId", (object?)sale.CustomerId?.ToString() ?? DBNull.Value);
             command.Parameters.AddWithValue("$seller", sale.SellerName);
+            command.Parameters.AddWithValue("$cashTotal", sale.CashTotal.ToString(CultureInfo.InvariantCulture));
+            command.Parameters.AddWithValue("$installments", (object?)sale.CreditTerms?.Installments ?? DBNull.Value);
+            command.Parameters.AddWithValue("$fee", sale.CreditTerms is null ? DBNull.Value : sale.CreditTerms.FeePercent.ToString(CultureInfo.InvariantCulture));
             await command.ExecuteNonQueryAsync(cancellationToken);
         }
 
@@ -125,6 +128,8 @@ public sealed class SqliteSaleRepository(SqliteDatabase database) : ISaleReposit
                 createdAt = sale.CreatedAt.ToString("O", CultureInfo.InvariantCulture),
                 paymentMethod = sale.PaymentMethod.ToString(),
                 sale.Total,
+                sale.CashTotal,
+                sale.CreditTerms,
                 sale.CustomerDocument,
                 customerId = sale.CustomerId?.ToString(),
                 sale.SellerName,
@@ -189,7 +194,8 @@ public sealed class SqliteSaleRepository(SqliteDatabase database) : ISaleReposit
                         THEN MAX(0, CAST(s.Total AS REAL)
                             - COALESCE((SELECT SUM(CAST(p.Amount AS REAL)) FROM SalePayments p WHERE p.SaleId = s.Id), 0)
                             - COALESCE((SELECT SUM(CAST(r.Amount AS REAL)) FROM Returns r WHERE r.SaleId = s.Id), 0))
-                        ELSE 0 END
+                        ELSE 0 END,
+                   s.CashTotal, s.CreditInstallments, s.CreditFeePercent
             FROM Sales s
             LEFT JOIN Customers c ON c.Id = s.CustomerId
             WHERE ($customerId IS NULL OR s.CustomerId = $customerId)
@@ -220,7 +226,9 @@ public sealed class SqliteSaleRepository(SqliteDatabase database) : ISaleReposit
                 CustomerId = reader.IsDBNull(8) ? null : Guid.Parse(reader.GetString(8)),
                 AmountPaid = Convert.ToDecimal(reader.GetValue(9), CultureInfo.InvariantCulture),
                 AmountReturned = Convert.ToDecimal(reader.GetValue(10), CultureInfo.InvariantCulture),
-                BalanceDue = Convert.ToDecimal(reader.GetValue(11), CultureInfo.InvariantCulture)
+                BalanceDue = Convert.ToDecimal(reader.GetValue(11), CultureInfo.InvariantCulture),
+                CashTotal = reader.IsDBNull(12) ? null : decimal.Parse(reader.GetString(12), CultureInfo.InvariantCulture),
+                CreditTerms = reader.IsDBNull(13) ? null : new CreditTerms(reader.GetInt32(13), decimal.Parse(reader.GetString(14), CultureInfo.InvariantCulture))
             });
         }
         return entries;
@@ -242,7 +250,8 @@ public sealed class SqliteSaleRepository(SqliteDatabase database) : ISaleReposit
                         THEN MAX(0, CAST(s.Total AS REAL)
                             - COALESCE((SELECT SUM(CAST(p.Amount AS REAL)) FROM SalePayments p WHERE p.SaleId = s.Id), 0)
                             - COALESCE((SELECT SUM(CAST(r.Amount AS REAL)) FROM Returns r WHERE r.SaleId = s.Id), 0))
-                        ELSE 0 END
+                        ELSE 0 END,
+                   s.CashTotal, s.CreditInstallments, s.CreditFeePercent
             FROM Sales s LEFT JOIN Customers c ON c.Id = s.CustomerId
             WHERE s.Id = $id;
             """;
@@ -262,7 +271,9 @@ public sealed class SqliteSaleRepository(SqliteDatabase database) : ISaleReposit
             CustomerId = reader.IsDBNull(7) ? null : Guid.Parse(reader.GetString(7)),
             AmountPaid = Convert.ToDecimal(reader.GetValue(8), CultureInfo.InvariantCulture),
             AmountReturned = Convert.ToDecimal(reader.GetValue(9), CultureInfo.InvariantCulture),
-            BalanceDue = Convert.ToDecimal(reader.GetValue(10), CultureInfo.InvariantCulture)
+            BalanceDue = Convert.ToDecimal(reader.GetValue(10), CultureInfo.InvariantCulture),
+            CashTotal = reader.IsDBNull(11) ? null : decimal.Parse(reader.GetString(11), CultureInfo.InvariantCulture),
+            CreditTerms = reader.IsDBNull(12) ? null : new CreditTerms(reader.GetInt32(12), decimal.Parse(reader.GetString(13), CultureInfo.InvariantCulture))
         };
         await reader.DisposeAsync();
 
@@ -284,18 +295,20 @@ public sealed class SqliteSaleRepository(SqliteDatabase database) : ISaleReposit
         }
         await using var returnedCommand = connection.CreateCommand();
         returnedCommand.CommandText = """
-            SELECT ProductId, SUM(CAST(Quantity AS REAL))
+            SELECT ProductId, Quantity
             FROM ReturnItems
-            WHERE ReturnId IN (SELECT Id FROM Returns WHERE SaleId = $saleId)
-            GROUP BY ProductId;
+            WHERE ReturnId IN (SELECT Id FROM Returns WHERE SaleId = $saleId);
             """;
         returnedCommand.Parameters.AddWithValue("$saleId", saleId.ToString());
         var returnedQuantities = new Dictionary<Guid, decimal>();
         await using (var returnedReader = await returnedCommand.ExecuteReaderAsync(cancellationToken))
         {
             while (await returnedReader.ReadAsync(cancellationToken))
-                returnedQuantities[Guid.Parse(returnedReader.GetString(0))] =
-                    Convert.ToDecimal(returnedReader.GetDouble(1), CultureInfo.InvariantCulture);
+            {
+                var productId = Guid.Parse(returnedReader.GetString(0));
+                returnedQuantities[productId] = returnedQuantities.GetValueOrDefault(productId) +
+                    decimal.Parse(returnedReader.GetString(1), CultureInfo.InvariantCulture);
+            }
         }
         await using var paymentsCommand = connection.CreateCommand();
         paymentsCommand.CommandText = """
@@ -312,7 +325,16 @@ public sealed class SqliteSaleRepository(SqliteDatabase database) : ISaleReposit
                     decimal.Parse(paymentsReader.GetString(1), CultureInfo.InvariantCulture),
                     Enum.Parse<PaymentMethod>(paymentsReader.GetString(2))));
         }
-        return new SaleRecord(summary, items, returnedQuantities) { Payments = payments };
+        await using var baseReturnsCommand = connection.CreateCommand();
+        baseReturnsCommand.CommandText = """
+            SELECT ri.Total FROM ReturnItems ri JOIN Returns r ON r.Id = ri.ReturnId WHERE r.SaleId = $saleId;
+            """;
+        baseReturnsCommand.Parameters.AddWithValue("$saleId", saleId.ToString());
+        decimal returnedBaseTotal = 0;
+        await using (var baseReader = await baseReturnsCommand.ExecuteReaderAsync(cancellationToken))
+            while (await baseReader.ReadAsync(cancellationToken))
+                returnedBaseTotal += decimal.Parse(baseReader.GetString(0), CultureInfo.InvariantCulture);
+        return new SaleRecord(summary, items, returnedQuantities) { Payments = payments, ReturnedBaseTotal = returnedBaseTotal };
     }
 
     public async Task<IReadOnlyList<OpenAccountEntry>> GetOpenAccountsAsync(
@@ -431,7 +453,7 @@ public sealed class SqliteSaleRepository(SqliteDatabase database) : ISaleReposit
         await transaction.CommitAsync(cancellationToken);
     }
 
-    public async Task ReturnSaleAsync(
+    public async Task<SaleReturnResult> ReturnSaleAsync(
         Guid saleId,
         IReadOnlyCollection<SaleItem> requestedItems,
         DateTimeOffset returnedAt,
@@ -447,16 +469,18 @@ public sealed class SqliteSaleRepository(SqliteDatabase database) : ISaleReposit
 
         await using var saleCommand = connection.CreateCommand();
         saleCommand.Transaction = (SqliteTransaction)transaction;
-        saleCommand.CommandText = "SELECT PaymentMethod, Total FROM Sales WHERE Id = $id;";
+        saleCommand.CommandText = "SELECT PaymentMethod, Total, CashTotal FROM Sales WHERE Id = $id;";
         saleCommand.Parameters.AddWithValue("$id", saleId.ToString());
         string paymentText;
         decimal saleTotal;
+        decimal? cashTotal;
         await using (var saleReader = await saleCommand.ExecuteReaderAsync(cancellationToken))
         {
             if (!await saleReader.ReadAsync(cancellationToken))
                 throw new InvalidOperationException("A venda selecionada não foi encontrada.");
             paymentText = saleReader.GetString(0);
             saleTotal = decimal.Parse(saleReader.GetString(1), CultureInfo.InvariantCulture);
+            cashTotal = saleReader.IsDBNull(2) ? null : decimal.Parse(saleReader.GetString(2), CultureInfo.InvariantCulture);
         }
         if (string.IsNullOrWhiteSpace(paymentText))
             throw new InvalidOperationException("A venda selecionada não foi encontrada.");
@@ -469,7 +493,7 @@ public sealed class SqliteSaleRepository(SqliteDatabase database) : ISaleReposit
             FROM SaleItems WHERE SaleId = $saleId ORDER BY Id;
             """;
         itemsCommand.Parameters.AddWithValue("$saleId", saleId.ToString());
-        var soldItems = new Dictionary<Guid, (string Name, decimal Quantity, decimal UnitPrice)>();
+        var soldItems = new Dictionary<Guid, (string Name, decimal Quantity, decimal UnitPrice, decimal Total)>();
         await using (var reader = await itemsCommand.ExecuteReaderAsync(cancellationToken))
         {
             while (await reader.ReadAsync(cancellationToken))
@@ -477,31 +501,36 @@ public sealed class SqliteSaleRepository(SqliteDatabase database) : ISaleReposit
                 var productId = Guid.Parse(reader.GetString(0));
                 var quantity = decimal.Parse(reader.GetString(2), CultureInfo.InvariantCulture);
                 var unitPrice = decimal.Parse(reader.GetString(3), CultureInfo.InvariantCulture);
+                var total = decimal.Parse(reader.GetString(4), CultureInfo.InvariantCulture);
                 if (soldItems.TryGetValue(productId, out var existing))
-                    soldItems[productId] = (existing.Name, existing.Quantity + quantity, unitPrice);
+                    soldItems[productId] = (existing.Name, existing.Quantity + quantity, unitPrice, existing.Total + total);
                 else
-                    soldItems[productId] = (reader.GetString(1), quantity, unitPrice);
+                    soldItems[productId] = (reader.GetString(1), quantity, unitPrice, total);
             }
         }
         if (soldItems.Count == 0)
             throw new InvalidOperationException("A venda não possui itens para devolver.");
 
-        var priorReturned = new Dictionary<Guid, decimal>();
+        var priorReturned = new Dictionary<Guid, (decimal Quantity, decimal Total)>();
         await using (var returnedItemsCommand = connection.CreateCommand())
         {
             returnedItemsCommand.Transaction = (SqliteTransaction)transaction;
             returnedItemsCommand.CommandText = """
-                SELECT ri.ProductId, SUM(CAST(ri.Quantity AS REAL))
+                SELECT ri.ProductId, ri.Quantity, ri.Total
                 FROM ReturnItems ri
                 JOIN Returns r ON r.Id = ri.ReturnId
-                WHERE r.SaleId = $saleId
-                GROUP BY ri.ProductId;
+                WHERE r.SaleId = $saleId;
                 """;
             returnedItemsCommand.Parameters.AddWithValue("$saleId", saleId.ToString());
             await using var reader = await returnedItemsCommand.ExecuteReaderAsync(cancellationToken);
             while (await reader.ReadAsync(cancellationToken))
-                priorReturned[Guid.Parse(reader.GetString(0))] =
-                    Convert.ToDecimal(reader.GetDouble(1), CultureInfo.InvariantCulture);
+            {
+                var productId = Guid.Parse(reader.GetString(0));
+                var previous = priorReturned.GetValueOrDefault(productId);
+                priorReturned[productId] = (
+                    previous.Quantity + decimal.Parse(reader.GetString(1), CultureInfo.InvariantCulture),
+                    previous.Total + decimal.Parse(reader.GetString(2), CultureInfo.InvariantCulture));
+            }
         }
 
         var normalizedItems = new Dictionary<Guid, (string Name, decimal Quantity, decimal UnitPrice, decimal Total)>();
@@ -509,23 +538,50 @@ public sealed class SqliteSaleRepository(SqliteDatabase database) : ISaleReposit
         {
             if (!soldItems.TryGetValue(requested.ProductId, out var sold))
                 throw new InvalidOperationException($"O produto '{requested.ProductName}' não pertence a esta venda.");
-            var alreadyReturned = priorReturned.GetValueOrDefault(requested.ProductId);
+            var previous = priorReturned.GetValueOrDefault(requested.ProductId);
+            var alreadyReturned = previous.Quantity;
             var inThisReturn = normalizedItems.GetValueOrDefault(requested.ProductId).Quantity;
             if (alreadyReturned + inThisReturn + requested.Quantity > sold.Quantity)
                 throw new InvalidOperationException(
                     $"A quantidade disponível para devolver de '{sold.Name}' é {sold.Quantity - alreadyReturned - inThisReturn:N3}.");
+            var returnedQuantity = alreadyReturned + inThisReturn + requested.Quantity;
+            var cumulativeBase = decimal.Round(sold.Total * returnedQuantity / sold.Quantity, 2, MidpointRounding.AwayFromZero);
+            var itemTotal = cumulativeBase - previous.Total;
+            if (itemTotal < 0)
+                throw new InvalidOperationException($"Os valores já devolvidos de '{sold.Name}' excedem o valor proporcional. Verifique o histórico.");
             normalizedItems[requested.ProductId] = (
                 sold.Name,
                 inThisReturn + requested.Quantity,
                 sold.UnitPrice,
-                decimal.Round((inThisReturn + requested.Quantity) * sold.UnitPrice, 2, MidpointRounding.AwayFromZero));
+                itemTotal);
         }
 
         var items = normalizedItems.Select(item =>
             (ProductId: item.Key, item.Value.Name, item.Value.Quantity, item.Value.UnitPrice, item.Value.Total)).ToList();
-        var amount = items.Sum(item => item.Total);
-        if (amount <= 0)
+        var baseAmount = items.Sum(item => item.Total);
+        var amount = baseAmount;
+        if (baseAmount <= 0)
             throw new InvalidOperationException("O valor da devolução precisa ser maior que zero.");
+        if (cashTotal is > 0 && saleTotal > cashTotal.Value)
+        {
+            var previousBase = priorReturned.Values.Sum(item => item.Total);
+            if (previousBase + baseAmount > cashTotal.Value)
+                throw new InvalidOperationException("O valor devolvido excederia o total à vista da venda. Verifique o histórico.");
+            var surcharge = saleTotal - cashTotal.Value;
+            var previousShare = decimal.Round(surcharge * previousBase / cashTotal.Value, 2, MidpointRounding.AwayFromZero);
+            var newShare = decimal.Round(surcharge * (previousBase + baseAmount) / cashTotal.Value, 2, MidpointRounding.AwayFromZero);
+            amount += newShare - previousShare;
+        }
+        await using (var previousAmountCommand = connection.CreateCommand())
+        {
+            previousAmountCommand.Transaction = (SqliteTransaction)transaction;
+            previousAmountCommand.CommandText = "SELECT Amount FROM Returns WHERE SaleId = $saleId;";
+            previousAmountCommand.Parameters.AddWithValue("$saleId", saleId.ToString());
+            var previousAmountText = (string?)await previousAmountCommand.ExecuteScalarAsync(cancellationToken);
+            var previousAmount = previousAmountText is null ? 0m : decimal.Parse(previousAmountText, CultureInfo.InvariantCulture);
+            if (amount + previousAmount > saleTotal)
+                throw new InvalidOperationException("O valor devolvido excederia o total da venda. Verifique o histórico.");
+        }
         var cashRefundAmount = amount;
         if (paymentMethod == PaymentMethod.StoreCredit)
         {
@@ -676,6 +732,7 @@ public sealed class SqliteSaleRepository(SqliteDatabase database) : ISaleReposit
             },
             cancellationToken);
         await transaction.CommitAsync(cancellationToken);
+        return new SaleReturnResult(baseAmount, amount);
     }
 
     private static async Task RecordAuditAsync(

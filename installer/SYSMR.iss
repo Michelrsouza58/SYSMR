@@ -3,7 +3,9 @@
 #define AppVersion "1.0.0"
 #define AppPublisher "SYSMR"
 #define AppExe "SYSMR.UI.exe"
-#define PublishDir "..\artifacts\publish"
+#ifndef PublishDir
+  #define PublishDir "..\artifacts\publish"
+#endif
 #define RuntimeDirectUrl "https://aka.ms/dotnet/8.0/windowsdesktop-runtime-win-x64.exe"
 
 [Setup]
@@ -35,9 +37,11 @@ Name: "startup"; Description: "Iniciar o SYSMR com o Windows"; GroupDescription:
 
 [Files]
 Source: "{#PublishDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "..\docs\MANUAL-USUARIO.html"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
 Name: "{group}\{#AppName}"; Filename: "{app}\{#AppExe}"
+Name: "{group}\Manual do SYSMR"; Filename: "{app}\MANUAL-USUARIO.html"
 Name: "{group}\Desinstalar {#AppName}"; Filename: "{uninstallexe}"
 Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExe}"; Tasks: desktopicon
 Name: "{commonstartup}\{#AppName}"; Filename: "{app}\{#AppExe}"; Tasks: startup

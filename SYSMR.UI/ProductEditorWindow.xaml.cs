@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Speech.Recognition;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Input;
 using SYSMR.Application.Services;
 using SYSMR.Domain.Entities;
 
@@ -30,7 +31,7 @@ public partial class ProductEditorWindow : Window
         NameBox.Text = product.Name;
         BarcodeBox.Text = product.Barcode;
         UnitCombo.Text = product.UnitOfMeasure;
-        CostBox.Text = product.CostPrice.ToString(CultureInfo.CurrentCulture);
+        CostBox.Text = product.CostPrice?.ToString(CultureInfo.CurrentCulture) ?? string.Empty;
         PriceBox.Text = product.SalePrice.ToString(CultureInfo.CurrentCulture);
         StockBox.Text = product.Stock.ToString(CultureInfo.CurrentCulture);
         MinimumStockBox.Text = product.MinimumStock.ToString(CultureInfo.CurrentCulture);
@@ -168,7 +169,17 @@ public partial class ProductEditorWindow : Window
         ErrorText.Text = string.Empty;
         try
         {
-            if (!TryParseAmount(CostBox.Text, out var cost) ||
+            decimal? cost = null;
+            if (!string.IsNullOrWhiteSpace(CostBox.Text))
+            {
+                if (!TryParseAmount(CostBox.Text, out var parsedCost))
+                {
+                    ErrorText.Text = "Informe um preço de custo válido ou deixe o campo vazio.";
+                    return;
+                }
+                cost = parsedCost;
+            }
+            if (
                 !TryParseAmount(PriceBox.Text, out var price) ||
                 !TryParseAmount(StockBox.Text, out var stock) ||
                 !TryParseAmount(MinimumStockBox.Text, out var minimumStock))
@@ -209,6 +220,14 @@ public partial class ProductEditorWindow : Window
     private static bool TryParseAmount(string text, out decimal value) =>
         decimal.TryParse(text, NumberStyles.Number, CultureInfo.CurrentCulture, out value) ||
         decimal.TryParse(text, NumberStyles.Number, CultureInfo.InvariantCulture, out value);
+
+    private void BarcodeBox_KeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key != Key.Enter)
+            return;
+        e.Handled = true;
+        UnitCombo.Focus();
+    }
 
     private void Cancel_Click(object sender, RoutedEventArgs e) => DialogResult = false;
 }

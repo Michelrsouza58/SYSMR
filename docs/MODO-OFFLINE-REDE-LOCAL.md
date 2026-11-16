@@ -161,3 +161,38 @@ estabelecimento nos recibos e a numeração de pedidos são limpos. Ao entrar no
 módulo restaurante, o salão e as mesas padrão são recriados para a nova loja.
 Escolher **Não** desvincula a conta sem limpar os dados, que continuarão
 visíveis para a próxima loja.
+
+## 11. Leitor e cadastro na área de vendas
+
+Um leitor USB configurado como teclado, com sufixo Enter, pode ser usado no
+campo de código do PDV ou no campo de busca. No cadastro de produto, clique no
+campo de código de barras antes de ler; o Enter do leitor não salva o produto.
+O código é consultado no banco local, sem necessidade de internet.
+
+O preço de custo é opcional: vazio significa **não informado**, diferente de
+um custo informado como zero. Os custos antigos continuam como estavam.
+Clientes podem ser acessados pela barra superior ou em Configurações e têm
+campos de CPF/CNPJ, telefone e endereço separado. Os novos dados de endereço
+são guardados no banco local; não são automaticamente publicados no Firebase.
+
+## 12. Crédito e parcelamento nas vendas
+
+Em **Configurações → Taxas de cartão de crédito**, informe os percentuais de
+desconto da maquininha para crédito de 1x até 12x. A tabela inicial é uma
+referência InfinitePay para recebimento em um dia útil e faturamento de até
+R$ 20 mil por mês; confira os percentuais contratados antes de operar, pois
+eles podem mudar. As taxas ficam armazenadas neste computador; alterações
+afetam apenas novas vendas.
+
+Na finalização, escolha cartão de crédito e o número de parcelas. O sistema
+divide o valor à vista por `1 - taxa/100` e arredonda para cima a parcela
+ao centavo; o total é a parcela multiplicada pela quantidade escolhida, para
+que todas sejam iguais e o valor líquido calculado não fique abaixo do preço à
+vista. Esse ajuste pode aumentar o total em até 11 centavos em relação ao
+arredondamento anterior. Vendas anteriores preservam os valores registrados,
+inclusive eventuais diferenças de centavos entre suas parcelas. Na tela de
+pagamento e no comprovante, o resumo mostra o valor à vista e o total no crédito
+com o número de parcelas. A taxa usada permanece registrada na venda. O cadastro não
+processa nem confirma o pagamento na maquininha: faça e confira a cobrança no
+equipamento. Em devoluções, o acréscimo é devolvido proporcionalmente; confirme
+o estorno na operadora, pois o sistema não o executa automaticamente.

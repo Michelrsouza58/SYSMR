@@ -23,7 +23,8 @@ public sealed class Sale
         IReadOnlyCollection<SaleItem> items,
         string? customerDocument = null,
         Guid? customerId = null,
-        string sellerName = "Não informado")
+        string sellerName = "Não informado",
+        CreditTerms? creditTerms = null)
     {
         if (items.Count == 0)
             throw new ArgumentException("A venda precisa conter ao menos um item.", nameof(items));
@@ -31,10 +32,16 @@ public sealed class Sale
             throw new ArgumentException("A venda contem itens invalidos.", nameof(items));
         if (paymentMethod == PaymentMethod.StoreCredit && customerId is null)
             throw new ArgumentException("Uma venda em conta precisa estar vinculada a um cliente cadastrado.", nameof(customerId));
+        if (creditTerms is not null && paymentMethod != PaymentMethod.CreditCard)
+            throw new ArgumentException("Parcelamento só pode ser aplicado a cartão de crédito.", nameof(creditTerms));
+        if (creditTerms is not null &&
+            creditTerms.CalculateMinimumTotal(items.Sum(item => item.Total)) < creditTerms.Installments / 100m)
+            throw new ArgumentException("O total no crédito deve permitir parcelas de pelo menos R$ 0,01.", nameof(creditTerms));
 
         Id = id;
         CreatedAt = createdAt;
         PaymentMethod = paymentMethod;
+        CreditTerms = creditTerms;
         Items = items;
         CustomerDocument = customerDocument?.Trim();
         CustomerId = customerId;
@@ -50,5 +57,7 @@ public sealed class Sale
     public string? CustomerDocument { get; }
     public Guid? CustomerId { get; }
     public string SellerName { get; }
-    public decimal Total => Items.Sum(item => item.Total);
+    public CreditTerms? CreditTerms { get; }
+    public decimal CashTotal => Items.Sum(item => item.Total);
+    public decimal Total => CreditTerms?.CalculateTotal(CashTotal) ?? CashTotal;
 }

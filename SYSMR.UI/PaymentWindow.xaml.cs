@@ -6,9 +6,15 @@ namespace SYSMR.UI;
 
 public partial class PaymentWindow : Window
 {
-    public PaymentWindow(decimal total, IReadOnlyList<string> sellers, bool hasRegisteredCustomer = false)
+    private readonly decimal _total;
+    private readonly IReadOnlyList<decimal> _rates;
+    public PaymentWindow(decimal total, IReadOnlyList<string> sellers, IReadOnlyList<decimal> rates, bool hasRegisteredCustomer = false)
     {
+        _total = total;
+        _rates = rates;
         InitializeComponent();
+        InstallmentsCombo.ItemsSource = Enumerable.Range(1, 12).Select(i => $"{i}x").ToArray();
+        InstallmentsCombo.SelectedIndex = 0;
         PaymentTotal.Text = total.ToString("C2");
         StoreCreditItem.IsEnabled = hasRegisteredCustomer;
         StoreCreditHint.Text = hasRegisteredCustomer
@@ -27,6 +33,7 @@ public partial class PaymentWindow : Window
     }
 
     public PaymentMethod SelectedPayment { get; private set; }
+    public CreditTerms? SelectedCreditTerms { get; private set; }
     public string SellerName => SellerComboBox.SelectedItem as string ?? string.Empty;
 
     private void SellerComboBox_KeyDown(object sender, System.Windows.Input.KeyEventArgs e)
@@ -63,7 +70,34 @@ public partial class PaymentWindow : Window
                 "Cliente obrigatório", MessageBoxButton.OK, MessageBoxImage.Warning);
             return;
         }
+        SelectedCreditTerms = SelectedPayment == PaymentMethod.CreditCard
+            ? new CreditTerms(InstallmentsCombo.SelectedIndex + 1, _rates[InstallmentsCombo.SelectedIndex])
+            : null;
+        if (SelectedCreditTerms is not null &&
+            SelectedCreditTerms.CalculateMinimumTotal(_total) < SelectedCreditTerms.Installments / 100m)
+        {
+            MessageBox.Show("Escolha menos parcelas: cada parcela deve ser de pelo menos R$ 0,01.",
+                "Valor insuficiente", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
         DialogResult = true;
+    }
+
+    private void UpdateCredit(object sender, SelectionChangedEventArgs e)
+    {
+        if (CreditPanel is null || InstallmentsCombo is null || CreditSummary is null || PaymentTotal is null)
+            return;
+        var credit = PaymentCombo.SelectedIndex == 3;
+        CreditPanel.Visibility = credit ? Visibility.Visible : Visibility.Collapsed;
+        if (!credit || InstallmentsCombo.SelectedIndex < 0)
+        {
+            PaymentTotal.Text = _total.ToString("C2");
+            return;
+        }
+        var terms = new CreditTerms(InstallmentsCombo.SelectedIndex + 1, _rates[InstallmentsCombo.SelectedIndex]);
+        var total = terms.CalculateTotal(_total);
+        PaymentTotal.Text = total.ToString("C2");
+        CreditSummary.Text = InstallmentDisplay.Format(terms, _total, total);
     }
 
     private void Cancel_Click(object sender, RoutedEventArgs e) => DialogResult = false;

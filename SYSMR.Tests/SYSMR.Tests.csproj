@@ -21,6 +21,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <Compile Include="..\SYSMR.UI\InstallmentDisplay.cs" Link="InstallmentDisplay.cs" />
     <ProjectReference Include="..\SYSMR.Domain\SYSMR.Domain.csproj" />
     <ProjectReference Include="..\SYSMR.Application\SYSMR.Application.csproj" />
     <ProjectReference Include="..\SYSMR.Infrastructure\SYSMR.Infrastructure.csproj" />

@@ -12,7 +12,8 @@ public sealed class SqliteCustomerRepository(SqliteDatabase database) : ICustome
         await connection.OpenAsync(cancellationToken);
         await using var command = connection.CreateCommand();
         command.CommandText = """
-            SELECT Id, Name, Document, Phone, Email, RegisteredAt, ExpiresAt
+            SELECT Id, Name, Document, Phone, Email, RegisteredAt, ExpiresAt,
+                   PostalCode, Street, Number, Complement, Neighborhood, City, State
             FROM Customers
             WHERE $query = '' OR Name LIKE $pattern ESCAPE '\' OR Document LIKE $pattern ESCAPE '\'
             ORDER BY Name LIMIT 500;
@@ -30,7 +31,9 @@ public sealed class SqliteCustomerRepository(SqliteDatabase database) : ICustome
                 reader.GetString(3),
                 reader.GetString(4),
                 DateTimeOffset.Parse(reader.GetString(5), CultureInfo.InvariantCulture),
-                DateTimeOffset.Parse(reader.GetString(6), CultureInfo.InvariantCulture)));
+                DateTimeOffset.Parse(reader.GetString(6), CultureInfo.InvariantCulture),
+                reader.GetString(7), reader.GetString(8), reader.GetString(9), reader.GetString(10),
+                reader.GetString(11), reader.GetString(12), reader.GetString(13)));
         }
         return customers;
     }
@@ -41,14 +44,19 @@ public sealed class SqliteCustomerRepository(SqliteDatabase database) : ICustome
         await connection.OpenAsync(cancellationToken);
         await using var command = connection.CreateCommand();
         command.CommandText = """
-            INSERT INTO Customers (Id, Name, Document, Phone, Email, RegisteredAt, ExpiresAt)
-            VALUES ($id, $name, $document, $phone, $email, $registeredAt, $expiresAt)
+            INSERT INTO Customers (Id, Name, Document, Phone, Email, RegisteredAt, ExpiresAt,
+                PostalCode, Street, Number, Complement, Neighborhood, City, State)
+            VALUES ($id, $name, $document, $phone, $email, $registeredAt, $expiresAt,
+                $postalCode, $street, $number, $complement, $neighborhood, $city, $state)
             ON CONFLICT(Id) DO UPDATE SET
                 Name = excluded.Name,
                 Document = excluded.Document,
                 Phone = excluded.Phone,
                 Email = excluded.Email,
-                ExpiresAt = excluded.ExpiresAt;
+                ExpiresAt = excluded.ExpiresAt,
+                PostalCode = excluded.PostalCode, Street = excluded.Street, Number = excluded.Number,
+                Complement = excluded.Complement, Neighborhood = excluded.Neighborhood,
+                City = excluded.City, State = excluded.State;
             """;
         command.Parameters.AddWithValue("$id", customer.Id.ToString());
         command.Parameters.AddWithValue("$name", customer.Name);
@@ -57,6 +65,13 @@ public sealed class SqliteCustomerRepository(SqliteDatabase database) : ICustome
         command.Parameters.AddWithValue("$email", customer.Email);
         command.Parameters.AddWithValue("$registeredAt", customer.RegisteredAt.ToString("O", CultureInfo.InvariantCulture));
         command.Parameters.AddWithValue("$expiresAt", customer.ExpiresAt.ToString("O", CultureInfo.InvariantCulture));
+        command.Parameters.AddWithValue("$postalCode", customer.PostalCode);
+        command.Parameters.AddWithValue("$street", customer.Street);
+        command.Parameters.AddWithValue("$number", customer.Number);
+        command.Parameters.AddWithValue("$complement", customer.Complement);
+        command.Parameters.AddWithValue("$neighborhood", customer.Neighborhood);
+        command.Parameters.AddWithValue("$city", customer.City);
+        command.Parameters.AddWithValue("$state", customer.State);
         await command.ExecuteNonQueryAsync(cancellationToken);
     }
 

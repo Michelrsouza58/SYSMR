@@ -21,7 +21,7 @@ public interface ISaleRepository
         DateTimeOffset paidAt,
         string actor,
         CancellationToken cancellationToken = default);
-    Task ReturnSaleAsync(
+    Task<SaleReturnResult> ReturnSaleAsync(
         Guid saleId,
         IReadOnlyCollection<SaleItem> items,
         DateTimeOffset returnedAt,

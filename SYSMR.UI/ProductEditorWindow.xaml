@@ -27,8 +27,8 @@
             <StackPanel>
                 <TextBlock Text="Descrição *" FontWeight="SemiBold" Margin="0,0,0,5"/>
                 <TextBox x:Name="NameBox" Margin="0,0,0,12"/>
-                <TextBlock Text="Código de barras" FontWeight="SemiBold" Margin="0,0,0,5"/>
-                <TextBox x:Name="BarcodeBox" Margin="0,0,0,12"/>
+                <TextBlock Text="Código de barras (clique no campo e passe o leitor)" FontWeight="SemiBold" Margin="0,0,0,5"/>
+                <TextBox x:Name="BarcodeBox" Margin="0,0,0,12" KeyDown="BarcodeBox_KeyDown"/>
                 <TextBlock Text="Unidade de medida *" FontWeight="SemiBold" Margin="0,0,0,5"/>
                 <ComboBox x:Name="UnitCombo" Padding="8" IsEditable="True" Text="UN" Margin="0,0,0,12">
                     <ComboBoxItem Content="UN"/>
@@ -44,8 +44,8 @@
                 <Grid Margin="0,0,0,12">
                     <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="12"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
                     <StackPanel>
-                        <TextBlock Text="Preço de custo" FontWeight="SemiBold" Margin="0,0,0,5"/>
-                        <TextBox x:Name="CostBox" Text="0,00"/>
+                        <TextBlock Text="Preço de custo (opcional)" FontWeight="SemiBold" Margin="0,0,0,5"/>
+                        <TextBox x:Name="CostBox"/>
                     </StackPanel>
                     <StackPanel Grid.Column="2">
                         <TextBlock Text="Preço de venda" FontWeight="SemiBold" Margin="0,0,0,5"/>

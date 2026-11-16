@@ -12,9 +12,10 @@ public sealed class SalesService(ISaleRepository sales)
         string? customerDocument,
         Guid? customerId = null,
         string sellerName = "Não informado",
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        CreditTerms? creditTerms = null)
     {
-        var sale = new Sale(Guid.NewGuid(), DateTimeOffset.UtcNow, paymentMethod, items, customerDocument, customerId, sellerName);
+        var sale = new Sale(Guid.NewGuid(), DateTimeOffset.UtcNow, paymentMethod, items, customerDocument, customerId, sellerName, creditTerms);
         await sales.SaveAsync(sale, cancellationToken);
         return sale.Id;
     }
@@ -47,7 +48,7 @@ public sealed class SalesService(ISaleRepository sales)
         CancellationToken cancellationToken = default) =>
         sales.RegisterAccountPaymentAsync(saleId, amount, paymentMethod, DateTimeOffset.UtcNow, actor, cancellationToken);
 
-    public Task ReturnSaleAsync(
+    public Task<SaleReturnResult> ReturnSaleAsync(
         Guid saleId,
         IReadOnlyCollection<SaleItem> items,
         string actor = "Super Admin",

@@ -1,0 +1,157 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SYSMR — Manual do usuário</title>
+  <style>
+    body { font: 16px/1.55 "Segoe UI", Arial, sans-serif; color: #17233b; max-width: 900px; margin: auto; padding: 28px; }
+    h1, h2, h3 { color: #17233b; line-height: 1.2; }
+    h1 { font-size: 34px; } h2 { margin-top: 40px; border-bottom: 2px solid #18a999; padding-bottom: 8px; }
+    h3 { margin-top: 24px; } a { color: #006f68; } li { margin: 5px 0; }
+    .intro, .notice { padding: 14px 18px; border-radius: 8px; background: #e8f7f3; }
+    .notice { background: #fff3dc; } code { font-size: 0.94em; overflow-wrap: anywhere; }
+    table { border-collapse: collapse; width: 100%; } td, th { text-align: left; border: 1px solid #d5dee8; padding: 8px; }
+    nav { columns: 2; } nav li { break-inside: avoid; } .small { color: #52627a; font-size: 0.9em; }
+    @media print { body { padding: 0; font-size: 11pt; } h2 { break-after: avoid; } a { color: inherit; text-decoration: none; } }
+    @media (max-width: 600px) { nav { columns: 1; } }
+  </style>
+</head>
+<body>
+<h1>SYSMR — Manual do usuário</h1>
+<p class="intro">Guia de instalação, vendas e restaurante. Abra este arquivo no navegador e use <strong>Ctrl+P</strong> para imprimir ou salvar como PDF. As opções podem variar conforme o formato da loja e os recursos habilitados.</p>
+<p class="notice"><strong>Importante:</strong> comprovantes de venda e pedidos são não fiscais. Esta versão não emite NFC-e, não realiza cobrança na maquininha e não executa estorno na operadora. Confirme pagamentos e estornos nos respectivos equipamentos.</p>
+<nav>
+  <ol>
+    <li><a href="#instalar">Instalação e atualização</a></li>
+    <li><a href="#acesso">Primeiro acesso e segurança</a></li>
+    <li><a href="#pdv">Venda no PDV</a></li>
+    <li><a href="#cadastros">Produtos, estoque e clientes</a></li>
+    <li><a href="#historico">Histórico, contas e devoluções</a></li>
+    <li><a href="#config-pdv">Configurações de vendas</a></li>
+    <li><a href="#restaurante">Restaurante: mesas e comandas</a></li>
+    <li><a href="#pagamento-restaurante">Restaurante: pagamento e impressão</a></li>
+    <li><a href="#cardapio">Cardápio e funcionários</a></li>
+    <li><a href="#caixa-restaurante">Caixa e gestão do restaurante</a></li>
+    <li><a href="#garcom">Pedidos pelo celular</a></li>
+    <li><a href="#rede">Sincronização, backup e problemas</a></li>
+  </ol>
+</nav>
+
+<h2 id="instalar">1. Instalação e atualização</h2>
+<ol>
+  <li>Use Windows 10 ou 11 de 64 bits. Este instalador precisa do <strong>.NET 8 Desktop Runtime x64</strong>. Se estiver ausente, o instalador oferece abrir a página de download; instale o runtime e execute o instalador novamente.</li>
+  <li>Feche o SYSMR antes de atualizar e faça backup dos dados conforme a seção 12. Execute o arquivo <strong>SYSMR-Setup</strong> e permita a instalação como administrador.</li>
+  <li>Siga as instruções, escolha os atalhos e conclua. O atalho <strong>Manual do SYSMR</strong> ficará disponível no menu Iniciar.</li>
+  <li>Abra o programa. O banco é criado em <code>%LOCALAPPDATA%\SYSMR\sysmr.db</code>, na conta do Windows que está usando o programa.</li>
+</ol>
+<p>Os produtos iniciais são exemplos: revise ou ajuste antes de operar. A instalação não cria automaticamente a conta Firebase nem configura as impressoras da loja.</p>
+
+<h2 id="acesso">2. Primeiro acesso e segurança</h2>
+<ol>
+  <li>Na primeira abertura, crie o PIN local do <strong>Super Admin</strong>, com pelo menos oito caracteres, e guarde-o em local seguro. A recuperação desse PIN não está disponível.</li>
+  <li>Na tela de login, use a aba <strong>Lojista</strong> com os dados da conta da loja. A criação da conta e a configuração Firebase devem ser feitas pelo administrador autorizado e exigem internet e serviços configurados.</li>
+  <li>Depois de um login online bem-sucedido, o acesso poderá funcionar offline com as credenciais já validadas. A sessão pode ser lembrada no computador; em um PC compartilhado, use <strong>Sair da conta</strong>.</li>
+  <li>Para funções administrativas, use <strong>Entrar Super Admin</strong> ou a opção equivalente em Configurações e informe o PIN. Ao terminar, encerre o acesso administrativo.</li>
+</ol>
+<p>O formato <strong>Vendas / PDV</strong> ou <strong>Restaurante</strong> determina as telas. A troca de formato exige Super Admin, conexão e fila pendente vazia; siga os avisos do programa e reabra-o após a mudança.</p>
+
+<h2 id="pdv">3. Fazer uma venda no PDV</h2>
+<ol>
+  <li>Antes da primeira venda, cadastre ao menos um vendedor ativo em <strong>Configurações</strong> e os produtos em <strong>Estoque</strong>.</li>
+  <li>Em <strong>Venda</strong>, clique no campo do leitor, bipando o código ou digitando-o e pressionando <strong>Enter</strong>. O leitor USB deve estar configurado como teclado e enviar Enter.</li>
+  <li>Também é possível usar <strong>F2</strong> para buscar por nome ou código e adicionar um resultado. Na grade, altere a quantidade ou use o botão de remover.</li>
+  <li>Se necessário, selecione um cliente cadastrado e/ou informe o documento no campo de cliente/CPF. <strong>F4</strong> leva ao campo de documento.</li>
+  <li>Pressione <strong>F5</strong>, escolha o vendedor e a forma de pagamento. Para crédito, selecione de 1x a 12x; confira o valor à vista e o total no crédito. Confirme o pagamento feito fora do programa e finalize.</li>
+  <li>Após registrar, escolha se deseja imprimir o comprovante não fiscal. Selecione <strong>80 mm</strong> ou <strong>A4</strong> e escolha a impressora no Windows.</li>
+</ol>
+<p><strong>Outros atalhos:</strong> F3 abre o cadastro de produto e inicia o ditado local do Windows quando disponível. Esc remove o item selecionado; o cancelamento da venda inteira exige autorização administrativa. Confira o que está selecionado antes de confirmar.</p>
+<p>Para etiquetas de balança, cadastre o produto como vendido por peso com seu código de balança. O formato aceito é EAN-13: prefixo 20, cinco dígitos do produto, cinco do peso em gramas e dígito verificador.</p>
+
+<h2 id="cadastros">4. Produtos, estoque e clientes</h2>
+<h3>Produtos e estoque</h3>
+<ol>
+  <li>Abra <strong>Estoque</strong> e clique em <strong>Produto</strong> para cadastrar ou escolha um produto para editar.</li>
+  <li>Preencha descrição, código de barras, categoria, preço de venda, unidade, quantidade e estoque mínimo. O custo é opcional; deixe em branco se não souber. Confira os campos fiscais quando aplicáveis.</li>
+  <li>No campo do código de barras, passe o leitor ou digite o código. Salve e pesquise o produto para conferir. Para ajustar o estoque, edite sua quantidade com cuidado.</li>
+  <li>Use o filtro de estoque baixo para localizar produtos que precisam de atenção. Vendas registradas reduzem o estoque; devoluções registradas repõem as quantidades.</li>
+</ol>
+<p>No editor, <strong>Iniciar escuta</strong> usa reconhecimento de voz local do Windows no campo selecionado; exige microfone e reconhecimento em português instalado. Revise o texto antes de salvar.</p>
+<h3>Clientes</h3>
+<p>Abra <strong>Clientes</strong> na barra superior ou pelo acesso em Configurações. Cadastre ou edite nome, CPF/CNPJ, telefone e endereço e salve. Uma venda em <strong>Conta / notinha</strong> exige um cliente cadastrado selecionado. Use <strong>Renovar 30 dias</strong> quando aplicável; vencimento do cadastro é apenas um aviso.</p>
+
+<h2 id="historico">5. Histórico, contas e devoluções</h2>
+<h3>Vendas e contas</h3>
+<p>Em <strong>Vendas</strong>, pesquise ou selecione uma venda para consultar seus itens. É possível selecionar um cliente e visualizar as vendas e <strong>Notas em aberto</strong>. Para receber uma nota, selecione-a, informe valor e forma de pagamento e confirme. Pagamentos parciais mantêm o saldo aberto; também é possível imprimir a nota.</p>
+<h3>Devoluções</h3>
+<ol>
+  <li>Abra <strong>Devoluções</strong>, selecione a venda e informe as quantidades dos produtos que estão sendo devolvidos.</li>
+  <li>Confira e confirme. O estoque é reposto e a devolução é registrada; em vendas no crédito o acréscimo é devolvido proporcionalmente. Em notas a prazo, o valor abate primeiro a dívida pendente.</li>
+  <li>Escolha se deseja imprimir o comprovante. Para uma venda já devolvida, use a impressão do resumo das devoluções.</li>
+</ol>
+<p>A operação no SYSMR não faz o estorno na maquininha. Faça o procedimento junto à operadora quando necessário.</p>
+
+<h2 id="config-pdv">6. Configurações de vendas e comprovantes</h2>
+<ul>
+  <li><strong>Vendedores:</strong> adicione e edite vendedores em Configurações; somente os ativos aparecem na finalização. O nome da venda antiga é preservado.</li>
+  <li><strong>Crédito:</strong> em <strong>Configurar taxas de crédito</strong>, ajuste os percentuais de 1x a 12x e salve. As taxas iniciais são referência InfinitePay, não garantia das taxas do contrato. O programa compensa a taxa e arredonda para que as parcelas das novas vendas sejam iguais. Mudanças não alteram vendas anteriores.</li>
+  <li><strong>Comprovantes:</strong> configure nome, telefone, endereço, rodapé, formato e impressora preferida. Instale a impressora no Windows e use <strong>Atualizar lista</strong> se necessário. Na hora de imprimir ainda é possível selecionar outra impressora.</li>
+  <li><strong>Auditoria:</strong> com acesso administrativo, abra <strong>Auditoria</strong> para consultar o registro local de ações.</li>
+</ul>
+<p>A área de vendas registra movimentos de venda, recebimento e devolução, mas não possui neste momento o fluxo completo de abertura e fechamento de caixa e o dashboard solicitados para o PDV. Não confunda com o caixa do módulo Restaurante.</p>
+
+<h2 id="restaurante">7. Restaurante: mesas e comandas</h2>
+<ol>
+  <li>Em <strong>Configurações</strong>, defina áreas e quantidades de mesas. Mesas cinzas estão livres; verdes possuem comanda aberta.</li>
+  <li>Em <strong>Salão e mesas</strong>, escolha a área e clique na mesa. Selecione o atendente na comanda. O nome do cliente informado pelo webapp aparece na mesa e na comanda; no desktop, pode aparecer “Cliente: não informado”.</li>
+  <li>Na comanda, selecione o item do cardápio, ajuste a quantidade, informe observação quando necessário e clique em <strong>Adicionar</strong>. A mesa passa a ocupada ao registrar o primeiro item.</li>
+  <li>Para retirar um item, use a ação de remoção e confirme. Há restrições após pagamentos parciais; leia o aviso do sistema. O estoque vinculado é reposto quando aplicável.</li>
+</ol>
+<p>O número diário do pedido é mostrado na comanda e nas vias de cozinha/balcão. Confira as mensagens de impressão pendente e, se necessário, use <strong>Reimprimir pendentes</strong>.</p>
+
+<h2 id="pagamento-restaurante">8. Restaurante: pagamento e impressão</h2>
+<ol>
+  <li>Abra o <strong>Caixa</strong> do restaurante antes de receber pagamentos. Na comanda, confira consumo e saldo; a opção de 10% do garçom, quando habilitada, deve ser decidida antes do primeiro pagamento.</li>
+  <li>Para pagar por valor, use <strong>Usar saldo total</strong>, informe um valor parcial ou use <strong>Dividir em</strong> e <strong>Calcular parcela</strong>. Escolha a forma e clique em <strong>Registrar pagamento</strong>. Em dinheiro, informe o recebido para calcular o troco.</li>
+  <li>Para pagar produtos específicos, marque <strong>Pagar por item</strong>, clique em <strong>Selecionar itens</strong>, informe as quantidades e registre o pagamento. Produtos já pagos não podem ser pagos novamente. Após pagamento livre não vinculado a itens, não se retorna ao modo por item naquela comanda.</li>
+  <li>Um pagamento parcial mantém o saldo aberto; quando quitado, a comanda é encerrada e a mesa fica livre.</li>
+</ol>
+<h3>Imprimir comanda</h3>
+<p>Na comanda, escolha <strong>Cozinha</strong> ou <strong>Balcão</strong> e <strong>Comanda toda</strong> ou <strong>Selecionados</strong>; selecione os itens quando necessário e clique em <strong>Imprimir</strong>. Cozinha usa formato de pedido; balcão inclui valores e soma. A cópia manual não muda a fila automática.</p>
+
+<h2 id="cardapio">9. Cardápio e funcionários</h2>
+<h3>Cardápio</h3>
+<p>Em <strong>Cardápio</strong>, adicione ou edite nome, descrição, categoria, preços e variações M/G. Configure o destino <strong>kitchen</strong> para cozinha ou <strong>bar</strong> para balcão. Se usado, vincule o produto de estoque e a quantidade consumida por porção. Ative apenas os itens que deseja vender e confira preços antes de publicar ou usar modelos de cardápio.</p>
+<h3>Funcionários e garçons</h3>
+<p>Em <strong>Funcionários</strong>, cadastre o atendente e defina as áreas que pode acessar. Para o atendimento local pelo celular, informe número de garçom e PIN local. Para acesso online, configure a conta web conforme os campos apresentados; depende do Firebase. Desative funcionários que não devem mais operar e confira se pertencem à loja atual.</p>
+
+<h2 id="caixa-restaurante">10. Caixa e gestão do restaurante</h2>
+<ol>
+  <li>Em <strong>Caixa</strong>, clique em <strong>Abrir caixa</strong> e informe o valor inicial em dinheiro. A abertura é necessária para registrar pagamentos de comandas.</li>
+  <li>Quando habilitados, consulte o dashboard por período, gastos, vendas por garçom e alertas de estoque; use <strong>Exportar CSV</strong> quando disponível. Em gastos, confira se a despesa foi paga com dinheiro do caixa.</li>
+  <li>Para fechar, quite as comandas abertas, clique em <strong>Encerrar caixa</strong> e informe o dinheiro contado. A opção de fechamento cego pode ocultar o valor esperado.</li>
+</ol>
+<p>Em <strong>Configurações → Recursos habilitados</strong>, o Super Admin pode permitir ou ocultar dashboard, gastos, relatórios, exportação, alerta de estoque, fechamento cego, impressão automática e taxa de serviço. Nem toda opção estará visível em todas as lojas.</p>
+
+<h2 id="garcom">11. Pedidos pelo celular</h2>
+<h3>Rede local, inclusive sem internet</h3>
+<ol>
+  <li>Conecte PC e celulares à mesma rede Wi-Fi. Em <strong>Configurações → Servidor local</strong>, habilite o servidor, escolha a porta e clique em <strong>Salvar e aplicar</strong>. Libere o firewall quando necessário.</li>
+  <li>No celular, abra o endereço local mostrado pelo SYSMR e entre com número e PIN local do garçom. A tela disponível depende da instalação do webapp; sem o aplicativo completo, pode aparecer uma interface simplificada.</li>
+  <li>Escolha a área e mesa, identifique o responsável, selecione produtos, tamanhos e observações e envie. Confirme que o pedido apareceu no desktop e foi impresso conforme o destino configurado.</li>
+</ol>
+<p>Para o acesso online, o webapp e a conta do garçom precisam estar configurados no Firebase. Se o pedido não aparecer, verifique conexão, loja/área, permissões e mensagens de erro. Não reenviar repetidamente sem conferir o estado do pedido.</p>
+
+<h2 id="rede">12. Sincronização, backup e problemas</h2>
+<ul>
+  <li><strong>Sincronização:</strong> o aplicativo salva operações localmente e envia eventos pendentes quando houver conexão e sessão autorizada. Consulte o indicador e trate erros; a sincronização não é restauração integral nem mesclagem completa entre computadores.</li>
+  <li><strong>Backup:</strong> feche o SYSMR e copie <code>%LOCALAPPDATA%\SYSMR\sysmr.db</code> para um local protegido. Mantenha cópias antes de atualizar ou desvincular a loja. Restauração deve ser testada com o programa fechado e na conta correta do Windows.</li>
+  <li><strong>Desvincular loja:</strong> a opção pode apagar dados locais e eventos pendentes se você escolher a limpeza. Faça backup e verifique pendências antes de confirmar. Não apaga automaticamente os dados da nuvem.</li>
+  <li><strong>Leitor não encontra produto:</strong> confira se o campo está selecionado, se o leitor envia Enter e se o código está cadastrado. Em produtos por peso, confira o formato da etiqueta e o código de balança.</li>
+  <li><strong>Não imprime:</strong> confira a impressora, papel, conexão, fila e configuração do destino. Na comanda, verifique o alerta de impressão pendente.</li>
+  <li><strong>Celular não conecta:</strong> confirme mesma rede, endereço local, servidor ativo, porta no firewall e PIN/área do garçom.</li>
+  <li><strong>Acesso offline falha:</strong> é necessário ter feito ao menos um login online bem-sucedido nessa conta e nesse computador. Verifique a senha sem compartilhar credenciais.</li>
+</ul>
+<p class="small">Manual preparado a partir das funções existentes nesta versão. Ele não inclui capturas de tela para evitar exposição de dados reais. O visual e as opções podem mudar em versões futuras.</p>
+</body>
+</html>
